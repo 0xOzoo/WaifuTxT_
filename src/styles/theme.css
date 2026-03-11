@@ -10,6 +10,11 @@
   --color-accent-pink: #ff2d78;
   --color-accent-pink-hover: #ff4d93;
   --color-accent-pink-dim: #ff2d7833;
+  --color-link: #ff2d78;
+  --color-link-hover: #ff4d93;
+  --color-mention: #ff2d78;
+  --color-mention-bg: #ff2d7826;
+  --color-mention-hover-bg: #ff2d7840;
 
   --color-text-primary: #e8e8f0;
   --color-text-secondary: #8888a8;

@@ -219,7 +219,7 @@ function syncRooms() {
 
       let avatarUrl: string | null = null
       try {
-        avatarUrl = room.getAvatarUrl(baseUrl, 48, 48, 'crop') || null
+        avatarUrl = room.getAvatarUrl(baseUrl, 48, 48, 'crop', false, true) || null
       } catch {
         // avatar URL resolution can fail
       }
@@ -267,7 +267,7 @@ function encryptedFallbackMessage(event: MatrixEvent, roomId: string): MessageEv
 
     let senderAvatar: string | null = null
     try {
-      senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false) || null
+      senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
     } catch { /* ignore */ }
 
     return {
@@ -388,7 +388,7 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
 
     let senderAvatar: string | null = null
     try {
-      senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false) || null
+      senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
     } catch {
       // avatar might fail
     }
@@ -527,7 +527,7 @@ export function loadRoomMembers(roomId: string): void {
     const members: RoomMember[] = matrixMembers.map((m) => {
       let avatarUrl: string | null = null
       try {
-        avatarUrl = m.getAvatarUrl(baseUrl, 40, 40, 'crop', false, false) || null
+        avatarUrl = m.getAvatarUrl(baseUrl, 40, 40, 'crop', false, false, true) || null
       } catch {
         // ignore
       }
@@ -619,6 +619,8 @@ export async function restoreKeyBackup(recoveryKey: string): Promise<{ imported:
 
 const decryptedUrlCache = new Map<string, string>()
 const decryptPromiseCache = new Map<string, Promise<string>>()
+const mediaBlobCache = new Map<string, string>()
+const mediaBlobPromiseCache = new Map<string, Promise<string | null>>()
 
 function base64ToBytes(base64: string): Uint8Array {
   let b64 = base64.replace(/-/g, '+').replace(/_/g, '/')
@@ -635,6 +637,101 @@ function buildAuthenticatedMediaUrl(mxcUrl: string): string | null {
   if (!match) return null
   const [, serverName, mediaId] = match
   return `${client.baseUrl}/_matrix/client/v1/media/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`
+}
+
+function appendAccessToken(url: string, accessToken: string): string {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}access_token=${encodeURIComponent(accessToken)}`
+}
+
+export function getMediaUrlWithAccessToken(url: string): string | null {
+  if (!client) return null
+  const accessToken = client.getAccessToken()
+  if (!accessToken) return null
+
+  if (url.startsWith('mxc://')) {
+    const authUrl = buildAuthenticatedMediaUrl(url)
+    return authUrl ? appendAccessToken(authUrl, accessToken) : null
+  }
+
+  try {
+    const parsed = new URL(url)
+    const m = parsed.pathname.match(/^\/_matrix\/(?:client\/v1|media\/v3)\/(?:media\/)?download\/([^/]+)\/(.+)$/)
+    if (!m) return appendAccessToken(url, accessToken)
+    const [, serverName, mediaId] = m
+    const candidate = `${parsed.origin}/_matrix/client/v1/media/download/${serverName}/${mediaId}`
+    return appendAccessToken(candidate, accessToken)
+  } catch {
+    return appendAccessToken(url, accessToken)
+  }
+}
+
+export async function loadMediaWithAuth(url: string): Promise<string | null> {
+  const cached = mediaBlobCache.get(url)
+  if (cached) return cached
+
+  const inflight = mediaBlobPromiseCache.get(url)
+  if (inflight) return inflight
+
+  const promise = (async () => {
+    if (!client) return null
+
+    const accessToken = client.getAccessToken()
+    let authUrl: string | null = null
+
+    if (url.startsWith('mxc://')) {
+      authUrl = buildAuthenticatedMediaUrl(url)
+    } else {
+      try {
+        const parsed = new URL(url)
+        const m = parsed.pathname.match(/^\/_matrix\/(?:client\/v1|media\/v3)\/(?:media\/)?download\/([^/]+)\/(.+)$/)
+        if (m) {
+          const [, serverName, mediaId] = m
+          authUrl = `${parsed.origin}/_matrix/client/v1/media/download/${serverName}/${mediaId}`
+        }
+      } catch {
+        // ignore malformed urls
+      }
+    }
+
+    const candidates = [authUrl, url].filter((u): u is string => !!u)
+    for (const candidate of candidates) {
+      try {
+        const response = await fetch(candidate, {
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+        })
+        if (!response.ok) continue
+
+        const blob = await response.blob()
+        const blobUrl = URL.createObjectURL(blob)
+        mediaBlobCache.set(url, blobUrl)
+        return blobUrl
+      } catch {
+        // try next candidate
+      }
+    }
+
+    if (accessToken) {
+      for (const candidate of candidates) {
+        try {
+          const response = await fetch(appendAccessToken(candidate, accessToken))
+          if (!response.ok) continue
+
+          const blob = await response.blob()
+          const blobUrl = URL.createObjectURL(blob)
+          mediaBlobCache.set(url, blobUrl)
+          return blobUrl
+        } catch {
+          // try next candidate
+        }
+      }
+    }
+    return null
+  })()
+
+  mediaBlobPromiseCache.set(url, promise)
+  promise.finally(() => mediaBlobPromiseCache.delete(url))
+  return promise
 }
 
 export async function decryptMediaUrl(file: EncryptedFileInfo): Promise<string> {

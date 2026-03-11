@@ -3,30 +3,60 @@ import { fr } from 'date-fns/locale'
 import { useState, useEffect, useCallback } from 'react'
 import type { MessageEvent, EncryptedFileInfo } from '../../types/matrix'
 import { Avatar } from '../common/Avatar'
-import { decryptMediaUrl, getUrlPreview, type UrlPreviewData } from '../../lib/matrix'
+import {
+  decryptMediaUrl,
+  getMediaUrlWithAccessToken,
+  getUrlPreview,
+  loadMediaWithAuth,
+  type UrlPreviewData,
+} from '../../lib/matrix'
 
-const URL_REGEX = /(https?:\/\/[^\s<]+[^\s<.,;:!?"'\])}>])/g
+const URL_REGEX = /https?:\/\/[^\s<]+[^\s<.,;:!?"'\])}>]/g
+const TOKEN_REGEX = /(https?:\/\/[^\s<]+[^\s<.,;:!?"'\])}>]|<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?)/g
 
-function Linkify({ text }: { text: string }) {
-  const parts = text.split(URL_REGEX)
+function mxidToMentionLabel(raw: string): string {
+  const mxid = raw.replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '')
+  const localpart = mxid.split(':')[0] || mxid
+  return `@${localpart}`
+}
+
+function RichText({ text }: { text: string }) {
+  const parts = text.split(TOKEN_REGEX)
   if (parts.length === 1) return <>{text}</>
+
   return (
     <>
-      {parts.map((part, i) =>
-        URL_REGEX.test(part) ? (
-          <a
-            key={i}
-            href={part}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-accent-pink hover:underline break-all"
-          >
-            {part}
-          </a>
-        ) : (
-          <span key={i}>{part}</span>
-        ),
-      )}
+      {parts.map((part, i) => {
+        if (!part) return null
+
+        if (part.startsWith('http://') || part.startsWith('https://')) {
+          return (
+            <a
+              key={i}
+              href={part}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-link hover:text-link-hover hover:underline break-all"
+            >
+              {part}
+            </a>
+          )
+        }
+
+        if (part.startsWith('<@') || /^@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?$/.test(part)) {
+          const label = mxidToMentionLabel(part)
+          return (
+            <span
+              key={i}
+              className="inline-flex items-center rounded px-1 py-0.5 bg-mention-bg text-mention hover:bg-mention-hover-bg transition-colors"
+            >
+              {label}
+            </span>
+          )
+        }
+
+        return <span key={i}>{part}</span>
+      })}
     </>
   )
 }
@@ -128,6 +158,52 @@ function useDecryptedUrl(encryptedFile?: EncryptedFileInfo): { url: string | nul
   return { url, error }
 }
 
+function ImageWithFallback({
+  src,
+  alt,
+  className,
+  onClick,
+  loading = 'lazy',
+}: {
+  src: string
+  alt: string
+  className: string
+  onClick?: () => void
+  loading?: 'lazy' | 'eager'
+}) {
+  const [displaySrc, setDisplaySrc] = useState(src)
+  const [triedAuth, setTriedAuth] = useState(false)
+
+  useEffect(() => {
+    setDisplaySrc(src)
+    setTriedAuth(false)
+  }, [src])
+
+  const handleError = async () => {
+    if (triedAuth) return
+    setTriedAuth(true)
+    const recovered = await loadMediaWithAuth(src)
+    if (recovered) {
+      setDisplaySrc(recovered)
+      return
+    }
+
+    const tokenUrl = getMediaUrlWithAccessToken(src)
+    if (tokenUrl) setDisplaySrc(tokenUrl)
+  }
+
+  return (
+    <img
+      src={displaySrc}
+      alt={alt}
+      className={className}
+      loading={loading}
+      onClick={onClick}
+      onError={handleError}
+    />
+  )
+}
+
 function EncryptedImage({ message }: { message: MessageEvent }) {
   const { url: decryptedUrl, error: mainError } = useDecryptedUrl(message.encryptedFile)
   const { url: thumbUrl } = useDecryptedUrl(message.encryptedThumbnailFile)
@@ -167,7 +243,7 @@ function EncryptedImage({ message }: { message: MessageEvent }) {
   return (
     <>
       <div className="mt-1 max-w-lg">
-        <img
+        <ImageWithFallback
           src={displayUrl}
           alt={message.content}
           className="rounded-lg max-h-80 object-contain cursor-pointer hover:opacity-90 transition-opacity"
@@ -255,7 +331,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
             ? <EncryptedImage message={message} />
             : (
               <div className="mt-1 max-w-lg">
-                <img
+                <ImageWithFallback
                   src={message.imageUrl}
                   alt={message.content}
                   className="rounded-lg max-h-80 object-contain cursor-pointer hover:opacity-90 transition-opacity"
@@ -288,7 +364,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
                   </svg>
                   Message chiffré — clé de récupération requise
                 </span>
-              ) : <Linkify text={message.content} />}
+              ) : <RichText text={message.content} />}
             </p>
             {extractUrls(message.content).slice(0, 3).map((linkUrl) => (
               <LinkPreviewCard key={linkUrl} url={linkUrl} />
@@ -298,7 +374,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
 
         {!isMediaType && message.type !== 'm.text' && message.type !== 'm.notice' && message.type !== 'm.emote' && message.content && (
           <>
-            <p className="text-sm text-text-primary leading-relaxed break-words"><Linkify text={message.content} /></p>
+            <p className="text-sm text-text-primary leading-relaxed break-words"><RichText text={message.content} /></p>
             {extractUrls(message.content).slice(0, 3).map((linkUrl) => (
               <LinkPreviewCard key={linkUrl} url={linkUrl} />
             ))}

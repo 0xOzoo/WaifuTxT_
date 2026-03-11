@@ -82,6 +82,12 @@ src/
 └── main.tsx
 ```
 
+## Known Issues
+
+- **Affichage des images avec texte (messages entrants)**: sur certains messages Matrix qui contiennent une image + du texte (notamment depuis d'autres clients comme Element), l'image peut ne pas se charger correctement dans WaifuTxT_ alors que le fichier/image seul fonctionne.
+- **Statut**: non resolu a ce stade, plusieurs fallbacks d'auth media sont deja en place, mais le cas persiste selon le homeserver/client emetteur.
+- **Piste de correction**: tracer precisement les URLs media recues (`url`, `file.url`, `thumbnail_url`) et les codes HTTP au moment du rendu pour harmoniser le chargement avec le comportement d'Element.
+
 ## Licence
 
 Projet personnel — pas de licence definie pour le moment.
