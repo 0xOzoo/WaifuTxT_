@@ -702,6 +702,20 @@ export interface UrlPreviewData {
 
 const previewCache = new Map<string, UrlPreviewData | null>()
 
+function normalizePreviewImageUrl(rawImage: string, pageUrl: string): string | undefined {
+  if (!rawImage) return undefined
+  if (rawImage.startsWith('mxc://')) {
+    return client?.mxcUrlToHttp(rawImage, 400, 200, 'scale') || undefined
+  }
+  if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) return rawImage
+  if (rawImage.startsWith('//')) return `https:${rawImage}`
+  try {
+    return new URL(rawImage, pageUrl).toString()
+  } catch {
+    return undefined
+  }
+}
+
 export async function getUrlPreview(url: string): Promise<UrlPreviewData | null> {
   const cached = previewCache.get(url)
   if (cached !== undefined) return cached
@@ -713,17 +727,18 @@ export async function getUrlPreview(url: string): Promise<UrlPreviewData | null>
     if (!data) { previewCache.set(url, null); return null }
 
     const ogData = data as Record<string, unknown>
-    const title = ogData['og:title'] as string | undefined
-    const description = ogData['og:description'] as string | undefined
-    const siteName = ogData['og:site_name'] as string | undefined
-    const mxcImage = ogData['og:image'] as string | undefined
+    const title = (ogData['og:title'] || ogData['title']) as string | undefined
+    const description = (ogData['og:description'] || ogData['description']) as string | undefined
+    const siteName = (ogData['og:site_name'] || ogData['site_name']) as string | undefined
+    const rawImage =
+      (ogData['og:image'] ||
+        ogData['og:image:url'] ||
+        ogData['twitter:image'] ||
+        ogData['image']) as string | undefined
 
     if (!title && !description) { previewCache.set(url, null); return null }
 
-    let imageUrl: string | undefined
-    if (mxcImage && mxcImage.startsWith('mxc://')) {
-      imageUrl = client.mxcUrlToHttp(mxcImage, 400, 200, 'scale') || undefined
-    }
+    const imageUrl = rawImage ? normalizePreviewImageUrl(rawImage, url) : undefined
 
     const result: UrlPreviewData = { title, description, imageUrl, siteName }
     previewCache.set(url, result)

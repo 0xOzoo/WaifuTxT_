@@ -38,6 +38,7 @@ function extractUrls(text: string): string[] {
 function LinkPreviewCard({ url }: { url: string }) {
   const [preview, setPreview] = useState<UrlPreviewData | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -58,14 +59,21 @@ function LinkPreviewCard({ url }: { url: string }) {
       rel="noopener noreferrer"
       className="mt-1.5 flex rounded-lg overflow-hidden border border-border bg-bg-tertiary hover:border-accent-pink/50 transition-colors max-w-md cursor-pointer"
     >
-      {preview.imageUrl && (
-        <img
-          src={preview.imageUrl}
-          alt=""
-          className="w-20 h-20 object-cover shrink-0"
-          loading="lazy"
-        />
-      )}
+      <div className="w-20 h-20 shrink-0 border-r border-border/60 bg-bg-hover/40 flex items-center justify-center">
+        {preview.imageUrl && !imageFailed ? (
+          <img
+            src={preview.imageUrl}
+            alt=""
+            className="w-full h-full object-cover"
+            loading="lazy"
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <svg className="w-6 h-6 text-text-muted/70" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 8.25V6.75A2.25 2.25 0 0011.25 4.5h-4.5A2.25 2.25 0 004.5 6.75v10.5A2.25 2.25 0 006.75 19.5h10.5a2.25 2.25 0 002.25-2.25v-4.5A2.25 2.25 0 0017.25 10.5h-1.5m-7.5 3h7.5m-7.5 3h4.5M15 4.5h4.5m0 0V9m0-4.5L10.5 13.5" />
+          </svg>
+        )}
+      </div>
       <div className="p-2.5 min-w-0 flex-1">
         {preview.siteName && (
           <p className="text-[10px] text-text-muted uppercase tracking-wide truncate">{preview.siteName}</p>
