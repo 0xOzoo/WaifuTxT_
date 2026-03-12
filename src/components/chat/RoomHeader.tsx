@@ -1,5 +1,6 @@
 import { useRoomStore } from '../../stores/roomStore'
 import { useUiStore } from '../../stores/uiStore'
+import { Avatar } from '../common/Avatar'
 
 export function RoomHeader() {
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
@@ -14,7 +15,7 @@ export function RoomHeader() {
 
   return (
     <div className="h-12 px-4 flex items-center gap-3 border-b border-border bg-bg-primary/50 shrink-0">
-      <span className="text-text-muted text-lg">#</span>
+      <Avatar src={room.avatarUrl} name={room.name} size={22} shape="rounded" />
       <h2 className="font-semibold text-text-primary text-sm">{room.name}</h2>
       {room.topic && (
         <>

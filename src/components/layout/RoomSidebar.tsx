@@ -57,13 +57,12 @@ export function RoomSidebar() {
           <button
             key={room.roomId}
             onClick={() => setActiveRoom(room.roomId)}
-            className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md transition-colors text-left cursor-pointer group ${
+            className={`w-full flex items-center px-2 py-1.5 rounded-md transition-colors text-left cursor-pointer group ${
               activeRoomId === room.roomId
                 ? 'bg-bg-hover text-text-primary'
                 : 'text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary'
             }`}
           >
-            <Avatar src={room.avatarUrl} name={room.name} size={32} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium truncate">{room.name}</span>
