@@ -1,21 +1,37 @@
-import { useState } from 'react'
-import { restoreKeyBackup } from '../../lib/matrix'
+import { useEffect, useState } from 'react'
+import { restoreKeyBackup, shouldShowKeyBackupBanner } from '../../lib/matrix'
 
 export function KeyBackupBanner() {
   const [showInput, setShowInput] = useState(false)
   const [recoveryKey, setRecoveryKey] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [message, setMessage] = useState('')
+  const [isRelevant, setIsRelevant] = useState<boolean | null>(null)
   const [dismissed, setDismissed] = useState(() =>
     sessionStorage.getItem('waifutxt_backup_dismissed') === '1',
   )
+
+  useEffect(() => {
+    let cancelled = false
+    shouldShowKeyBackupBanner()
+      .then((show) => {
+        if (!cancelled) setIsRelevant(show)
+      })
+      .catch(() => {
+        if (!cancelled) setIsRelevant(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const handleDismiss = () => {
     setDismissed(true)
     sessionStorage.setItem('waifutxt_backup_dismissed', '1')
   }
 
-  if (dismissed || status === 'success') return null
+  if (isRelevant === null) return null
+  if (!isRelevant || dismissed || status === 'success') return null
 
   const handleRestore = async () => {
     if (!recoveryKey.trim()) return
@@ -25,11 +41,10 @@ export function KeyBackupBanner() {
       const result = await restoreKeyBackup(recoveryKey)
       setStatus('success')
       setMessage(`${result.imported} / ${result.total} clés restaurées !`)
-      setTimeout(() => handleDismiss(), 4000)
+      setTimeout(() => handleDismiss(), 3000)
     } catch (err) {
       setStatus('error')
       const msg = err instanceof Error ? err.message : String(err)
-      console.error('[WaifuTxT] Key backup restore error:', err)
       setMessage(msg)
     }
   }
@@ -41,9 +56,7 @@ export function KeyBackupBanner() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
         </svg>
         <div className="flex-1 min-w-0">
-          <p className="text-sm text-text-primary font-medium">
-            Déchiffrer les anciens messages
-          </p>
+          <p className="text-sm text-text-primary font-medium">Déchiffrer les anciens messages</p>
           <p className="text-xs text-text-secondary mt-0.5">
             Entrez votre clé de récupération pour lire l'historique des salons chiffrés.
           </p>

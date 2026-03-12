@@ -1,7 +1,6 @@
 import type { MatrixSession, MessageEvent, RoomSummary, RoomMember, EncryptedFileInfo } from '../types/matrix'
-import { useAuthStore } from '../stores/authStore'
-import { useRoomStore } from '../stores/roomStore'
 import { useMessageStore } from '../stores/messageStore'
+import { useRoomStore } from '../stores/roomStore'
 
 type MatrixClient = import('matrix-js-sdk').MatrixClient
 type MatrixEvent = import('matrix-js-sdk').MatrixEvent
@@ -9,11 +8,13 @@ type MatrixEvent = import('matrix-js-sdk').MatrixEvent
 let client: MatrixClient | null = null
 let sdk: typeof import('matrix-js-sdk') | null = null
 let pendingSecretStorageKey: { keyId: string; key: Uint8Array } | null = null
+const mediaBlobCache = new Map<string, string>()
+const mediaBlobPromiseCache = new Map<string, Promise<string | null>>()
+const decryptedUrlCache = new Map<string, string>()
+const decryptPromiseCache = new Map<string, Promise<string>>()
 
 async function getSDK() {
-  if (!sdk) {
-    sdk = await import('matrix-js-sdk')
-  }
+  if (!sdk) sdk = await import('matrix-js-sdk')
   return sdk
 }
 
@@ -28,22 +29,18 @@ export async function login(
 ): Promise<MatrixSession> {
   const matrixSdk = await getSDK()
   const tempClient = matrixSdk.createClient({ baseUrl: homeserver })
-
   const response = await tempClient.login('m.login.password', {
     user: username,
     password,
     initial_device_display_name: 'WaifuTxT Web',
   })
 
-  const session: MatrixSession = {
+  return {
     userId: response.user_id,
     accessToken: response.access_token,
     homeserver,
-    deviceId: response.device_id,
+    deviceId: response.device_id || '',
   }
-
-  tempClient.stopClient()
-  return session
 }
 
 export async function initClient(session: MatrixSession): Promise<void> {
@@ -57,21 +54,19 @@ export async function initClient(session: MatrixSession): Promise<void> {
     timelineSupport: true,
     useAuthorizationHeader: true,
     cryptoCallbacks: {
-      getSecretStorageKey: async ({ keys }) => {
+      getSecretStorageKey: async ({ keys }, _name) => {
         if (!pendingSecretStorageKey) return null
         const { keyId, key } = pendingSecretStorageKey
         if (!(keyId in keys)) return null
-        return [keyId, key]
+        return [keyId, key as Uint8Array<ArrayBuffer>]
       },
     },
   })
 
   try {
-    console.log('[WaifuTxT] Initializing Rust crypto...')
     await client.initRustCrypto()
-    console.log('[WaifuTxT] Rust crypto initialized')
   } catch (err) {
-    console.warn('[WaifuTxT] Crypto init failed, E2EE rooms won\'t be readable:', err)
+    console.warn('[WaifuTxT] Crypto init failed:', err)
   }
 
   setupEventListeners(matrixSdk)
@@ -83,16 +78,14 @@ export async function initClient(session: MatrixSession): Promise<void> {
 }
 
 export async function logout(): Promise<void> {
-  if (client) {
-    try {
-      await client.logout(true)
-    } catch {
-      // ignore
-    }
-    client.stopClient()
-    client = null
+  if (!client) return
+  try {
+    await client.logout(true)
+  } catch {
+    // ignore
   }
-  useAuthStore.getState().logout()
+  client.stopClient()
+  client = null
   useRoomStore.getState().reset()
   useMessageStore.getState().reset()
 }
@@ -118,26 +111,20 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
 
       if (type === 'm.room.encrypted') {
         if (event.isDecryptionFailure?.()) {
-          const msg = encryptedFallbackMessage(event, room.roomId)
-          if (msg) {
-            useMessageStore.getState().addMessage(room.roomId, msg)
-            updateRoomLastMessage(room.roomId, msg)
+          const fallback = encryptedFallbackMessage(event, room.roomId)
+          if (fallback) {
+            useMessageStore.getState().addMessage(room.roomId, fallback)
+            updateRoomLastMessage(room.roomId, fallback)
           }
         }
 
         event.once(matrixSdk.MatrixEventEvent.Decrypted, () => {
-          try {
-            if (event.getType() !== 'm.room.message') return
-            const msg = eventToMessage(event, room.roomId)
-            if (msg) {
-              const store = useMessageStore.getState()
-              store.replaceMessage(room.roomId, msg.eventId, msg)
-              store.addMessage(room.roomId, msg)
-              updateRoomLastMessage(room.roomId, msg)
-            }
-          } catch (err) {
-            console.error('[WaifuTxT] Decrypted event error:', err)
-          }
+          const msg = eventToMessage(event, room.roomId)
+          if (!msg) return
+          const store = useMessageStore.getState()
+          store.replaceMessage(room.roomId, msg.eventId, msg)
+          store.addMessage(room.roomId, msg)
+          updateRoomLastMessage(room.roomId, msg)
         })
         return
       }
@@ -163,128 +150,102 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
         roomId: member.roomId,
         userIds: typingMembers.map((m: import('matrix-js-sdk').RoomMember) => m.name || m.userId),
       })
-    } catch (err) {
-      console.error('[WaifuTxT] Typing event error:', err)
+    } catch {
+      // ignore typing errors
     }
   })
 
   client.on(matrixSdk.RoomEvent.Receipt, () => {
-    try {
-      syncRooms()
-    } catch (err) {
-      console.error('[WaifuTxT] Receipt event error:', err)
-    }
+    syncRooms()
   })
 }
 
 function syncRooms() {
   if (!client) return
-
   const matrixRooms = client.getRooms()
   const roomMap = new Map<string, RoomSummary>()
   const baseUrl = client.baseUrl
 
   for (const room of matrixRooms) {
-    try {
-      const stateEvents = room.currentState.getStateEvents('m.room.create')
-      const createEvent = stateEvents?.[0]
-      const isSpace = createEvent?.getContent()?.type === 'm.space'
+    const createEvent = room.currentState.getStateEvents('m.room.create')?.[0]
+    const isSpace = createEvent?.getContent()?.type === 'm.space'
 
-      const children: string[] = []
-      if (isSpace) {
-        const childEvents = room.currentState.getStateEvents('m.space.child')
-        for (const ev of childEvents) {
-          const stateKey = ev.getStateKey()
-          if (ev.getContent()?.via && stateKey) {
-            children.push(stateKey)
-          }
-        }
+    const children: string[] = []
+    if (isSpace) {
+      const childEvents = room.currentState.getStateEvents('m.space.child')
+      for (const ev of childEvents) {
+        const stateKey = ev.getStateKey()
+        if (ev.getContent()?.via && stateKey) children.push(stateKey)
       }
-
-      let isDirect = false
-      try {
-        const directMap = client!.getAccountData('m.direct')?.getContent() || {}
-        isDirect = Object.values(directMap).some((roomIds) =>
-          (roomIds as string[]).includes(room.roomId),
-        )
-      } catch {
-        // m.direct might not be available yet
-      }
-
-      const timeline = room.getLiveTimeline().getEvents()
-      const lastEvent = [...timeline].reverse().find((e) =>
-        e.getType() === 'm.room.message' || e.getType() === 'm.room.encrypted',
-      )
-      const lastContent = lastEvent?.getContent()
-
-      let avatarUrl: string | null = null
-      try {
-        avatarUrl = room.getAvatarUrl(baseUrl, 48, 48, 'crop', false, true) || null
-      } catch {
-        // avatar URL resolution can fail
-      }
-
-      let topic = ''
-      try {
-        topic = room.currentState.getStateEvents('m.room.topic')?.[0]?.getContent()?.topic || ''
-      } catch {
-        // topic might not exist
-      }
-
-      let lastMessageText = lastContent?.body || ''
-      if (lastMessageText.includes('Unable to decrypt') || lastContent?.msgtype === 'm.bad.encrypted') {
-        lastMessageText = '🔒 Message chiffré'
-      }
-
-      roomMap.set(room.roomId, {
-        roomId: room.roomId,
-        name: room.name || 'Sans nom',
-        avatarUrl,
-        topic,
-        lastMessage: lastMessageText,
-        lastMessageTs: lastEvent?.getTs() || 0,
-        unreadCount: room.getUnreadNotificationCount('total') || 0,
-        isSpace,
-        isDirect,
-        membership: room.getMyMembership(),
-        children,
-      })
-    } catch (err) {
-      console.error(`[WaifuTxT] Error processing room ${room.roomId}:`, err)
     }
+
+    let isDirect = false
+    try {
+      const directMap = (client as unknown as { getAccountData: (key: string) => { getContent: () => unknown } | null })
+        .getAccountData('m.direct')?.getContent() || {}
+      isDirect = Object.values(directMap).some((roomIds) => (roomIds as string[]).includes(room.roomId))
+    } catch {
+      // ignore
+    }
+
+    const timeline = room.getLiveTimeline().getEvents()
+    const lastEvent = [...timeline].reverse().find((e) => e.getType() === 'm.room.message' || e.getType() === 'm.room.encrypted')
+    const lastContent = lastEvent?.getContent()
+
+    let avatarUrl: string | null = null
+    try {
+      avatarUrl = room.getAvatarUrl(baseUrl, 48, 48, 'crop', false, true) || null
+    } catch {
+      // ignore
+    }
+
+    const topic = room.currentState.getStateEvents('m.room.topic')?.[0]?.getContent()?.topic || ''
+    let lastMessageText = lastContent?.body || ''
+    if (lastMessageText.includes('Unable to decrypt') || lastContent?.msgtype === 'm.bad.encrypted') {
+      lastMessageText = '🔒 Message chiffré'
+    }
+
+    roomMap.set(room.roomId, {
+      roomId: room.roomId,
+      name: room.name || 'Sans nom',
+      avatarUrl,
+      topic,
+      lastMessage: lastMessageText,
+      lastMessageTs: lastEvent?.getTs() || 0,
+      unreadCount: room.getUnreadNotificationCount() || 0,
+      isSpace,
+      isDirect,
+      membership: room.getMyMembership(),
+      children,
+    })
   }
 
   useRoomStore.getState().setRooms(roomMap)
 }
 
 function encryptedFallbackMessage(event: MatrixEvent, roomId: string): MessageEvent | null {
+  const sender = event.getSender()
+  if (!sender) return null
+  const room = client?.getRoom(roomId)
+  const member = room?.getMember(sender)
+  let senderAvatar: string | null = null
   try {
-    const sender = event.getSender()
-    if (!sender) return null
-
-    const room = client?.getRoom(roomId)
-    const member = room?.getMember(sender)
-
-    let senderAvatar: string | null = null
-    try {
-      senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
-    } catch { /* ignore */ }
-
-    return {
-      eventId: event.getId()!,
-      roomId,
-      sender,
-      senderName: member?.name || sender,
-      senderAvatar,
-      content: '🔒 Message chiffré (impossible de déchiffrer)',
-      htmlContent: null,
-      timestamp: event.getTs(),
-      type: 'm.notice',
-      replyTo: null,
-      isEdited: false,
-    }
+    senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
   } catch {
-    return null
+    // ignore
+  }
+  return {
+    eventId: event.getId() || `${roomId}-${event.getTs()}`,
+    roomId,
+    sender,
+    senderName: member?.name || sender,
+    senderAvatar,
+    content: '🔒 Message chiffré — clé de récupération requise',
+    htmlContent: null,
+    timestamp: event.getTs(),
+    type: 'm.notice',
+    replyTo: null,
+    isEdited: false,
   }
 }
 
@@ -296,136 +257,95 @@ function updateRoomLastMessage(roomId: string, msg: MessageEvent) {
 }
 
 function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null {
-  try {
-    if (event.isEncrypted?.() && event.isDecryptionFailure?.()) {
-      return encryptedFallbackMessage(event, roomId)
-    }
+  const content = event.getContent()
+  if (!content.body && !content.msgtype) return null
+  if (event.isEncrypted?.() && event.isDecryptionFailure?.()) return encryptedFallbackMessage(event, roomId)
+  if (content.msgtype === 'm.bad.encrypted' || content.body?.includes?.('Unable to decrypt')) return encryptedFallbackMessage(event, roomId)
 
-    const content = event.getContent()
-    if (!content.body && !content.msgtype) return null
+  const sender = event.getSender()
+  if (!sender) return null
+  const room = client?.getRoom(roomId)
+  const member = room?.getMember(sender)
 
-    if (content.msgtype === 'm.bad.encrypted' || content.body?.includes?.('Unable to decrypt')) {
-      return encryptedFallbackMessage(event, roomId)
-    }
+  const msgtype = content.msgtype || 'm.text'
+  let type: MessageEvent['type'] = 'm.text'
+  if (msgtype === 'm.image') type = 'm.image'
+  else if (msgtype === 'm.file') type = 'm.file'
+  else if (msgtype === 'm.video') type = 'm.video'
+  else if (msgtype === 'm.audio') type = 'm.audio'
+  else if (msgtype === 'm.notice') type = 'm.notice'
+  else if (msgtype === 'm.emote') type = 'm.emote'
 
-    const sender = event.getSender()
-    if (!sender) return null
+  const replyTo = content['m.relates_to']?.['m.in_reply_to']?.event_id || null
 
-    const room = client?.getRoom(roomId)
-    const member = room?.getMember(sender)
+  let imageUrl: string | undefined
+  let imageInfo: MessageEvent['imageInfo']
+  let thumbnailUrl: string | undefined
+  let encryptedFile: EncryptedFileInfo | undefined
+  let encryptedThumbnailFile: EncryptedFileInfo | undefined
+  let fileUrl: string | undefined
+  let fileName: string | undefined
+  let fileSize: number | undefined
 
-    const msgtype = content.msgtype || 'm.text'
-    let type: MessageEvent['type'] = 'm.text'
-    if (msgtype === 'm.image') type = 'm.image'
-    else if (msgtype === 'm.file') type = 'm.file'
-    else if (msgtype === 'm.video') type = 'm.video'
-    else if (msgtype === 'm.audio') type = 'm.audio'
-    else if (msgtype === 'm.notice') type = 'm.notice'
-    else if (msgtype === 'm.emote') type = 'm.emote'
-
-    const relatesTo = content['m.relates_to']
-    const replyTo = relatesTo?.['m.in_reply_to']?.event_id || null
-
-    let imageUrl: string | undefined
-    let imageInfo: MessageEvent['imageInfo']
-    let thumbnailUrl: string | undefined
-    let encryptedFile: EncryptedFileInfo | undefined
-    let encryptedThumbnailFile: EncryptedFileInfo | undefined
-
-    if (type === 'm.image') {
-      imageInfo = content.info
-      if (content.file) {
-        encryptedFile = content.file as EncryptedFileInfo
-        if (content.info?.thumbnail_file) {
-          encryptedThumbnailFile = content.info.thumbnail_file as EncryptedFileInfo
-        }
-      } else if (content.url) {
-        imageUrl = client?.mxcUrlToHttp(content.url, 800, 600, 'scale') || undefined
-        if (content.info?.thumbnail_url) {
-          thumbnailUrl = client?.mxcUrlToHttp(content.info.thumbnail_url, 400, 300, 'scale') || undefined
-        }
-      }
-    }
-
-    let fileUrl: string | undefined
-    let fileName: string | undefined
-    let fileSize: number | undefined
-    if (type === 'm.file') {
-      fileName = content.filename || content.body
-      fileSize = content.info?.size
-      if (content.file) {
-        encryptedFile = content.file as EncryptedFileInfo
-      } else if (content.url) {
-        fileUrl = client?.mxcUrlToHttp(content.url) || undefined
-      }
-    }
-
-    if (type === 'm.video') {
-      fileName = content.filename || content.body
-      fileSize = content.info?.size
-      if (content.file) {
-        encryptedFile = content.file as EncryptedFileInfo
-        if (content.info?.thumbnail_file) {
-          encryptedThumbnailFile = content.info.thumbnail_file as EncryptedFileInfo
-        }
-      } else if (content.url) {
-        fileUrl = client?.mxcUrlToHttp(content.url) || undefined
-      }
+  if (type === 'm.image') {
+    imageInfo = content.info
+    if (content.file) {
+      encryptedFile = content.file as EncryptedFileInfo
+      if (content.info?.thumbnail_file) encryptedThumbnailFile = content.info.thumbnail_file as EncryptedFileInfo
+    } else if (content.url) {
+      imageUrl = client?.mxcUrlToHttp(content.url, 900, 900, 'scale', false, true) || undefined
       if (content.info?.thumbnail_url) {
-        thumbnailUrl = client?.mxcUrlToHttp(content.info.thumbnail_url, 400, 300, 'scale') || undefined
+        thumbnailUrl = client?.mxcUrlToHttp(content.info.thumbnail_url, 400, 300, 'scale', false, true) || undefined
       }
     }
+  }
 
-    if (type === 'm.audio') {
-      fileName = content.filename || content.body
-      fileSize = content.info?.size
-      if (content.file) {
-        encryptedFile = content.file as EncryptedFileInfo
-      } else if (content.url) {
-        fileUrl = client?.mxcUrlToHttp(content.url) || undefined
+  if (type === 'm.file' || type === 'm.video' || type === 'm.audio') {
+    fileName = content.filename || content.body
+    fileSize = content.info?.size
+    if (content.file) encryptedFile = content.file as EncryptedFileInfo
+    else if (content.url) fileUrl = client?.mxcUrlToHttp(content.url, undefined, undefined, undefined, false, true) || undefined
+    if (type === 'm.video') {
+      if (content.info?.thumbnail_file) encryptedThumbnailFile = content.info.thumbnail_file as EncryptedFileInfo
+      if (content.info?.thumbnail_url) {
+        thumbnailUrl = client?.mxcUrlToHttp(content.info.thumbnail_url, 400, 300, 'scale', false, true) || undefined
       }
     }
+  }
 
-    let senderAvatar: string | null = null
-    try {
-      senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
-    } catch {
-      // avatar might fail
-    }
+  let senderAvatar: string | null = null
+  try {
+    senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
+  } catch {
+    // ignore
+  }
 
-    return {
-      eventId: event.getId()!,
-      roomId,
-      sender,
-      senderName: member?.name || sender,
-      senderAvatar,
-      content: content.body || '',
-      htmlContent: content.formatted_body || null,
-      timestamp: event.getTs(),
-      type,
-      replyTo,
-      isEdited: !!content['m.new_content'],
-      imageUrl,
-      imageInfo,
-      thumbnailUrl,
-      fileName,
-      fileUrl,
-      fileSize,
-      encryptedFile,
-      encryptedThumbnailFile,
-    }
-  } catch (err) {
-    console.error('[WaifuTxT] eventToMessage error:', err)
-    return null
+  return {
+    eventId: event.getId() || `${roomId}-${event.getTs()}`,
+    roomId,
+    sender,
+    senderName: member?.name || sender,
+    senderAvatar,
+    content: content.body || '',
+    htmlContent: content.formatted_body || null,
+    timestamp: event.getTs(),
+    type,
+    replyTo,
+    isEdited: !!content['m.new_content'],
+    imageUrl,
+    imageInfo,
+    thumbnailUrl,
+    fileName,
+    fileUrl,
+    fileSize,
+    encryptedFile,
+    encryptedThumbnailFile,
   }
 }
 
 export async function sendMessage(roomId: string, body: string): Promise<void> {
   if (!client) return
-  await client.sendMessage(roomId, {
-    msgtype: 'm.text',
-    body,
-  })
+  await client.sendMessage(roomId, { msgtype: 'm.text', body } as any)
 }
 
 export async function sendImage(roomId: string, file: File): Promise<void> {
@@ -433,13 +353,10 @@ export async function sendImage(roomId: string, file: File): Promise<void> {
   const upload = await client.uploadContent(file)
   await client.sendMessage(roomId, {
     msgtype: 'm.image',
-    body: file.name,
+    body: file.name || 'image.png',
     url: upload.content_uri,
-    info: {
-      mimetype: file.type,
-      size: file.size,
-    },
-  })
+    info: { mimetype: file.type, size: file.size },
+  } as any)
 }
 
 export async function sendFile(roomId: string, file: File): Promise<void> {
@@ -448,44 +365,30 @@ export async function sendFile(roomId: string, file: File): Promise<void> {
   await client.sendMessage(roomId, {
     msgtype: 'm.file',
     body: file.name,
+    filename: file.name,
     url: upload.content_uri,
-    info: {
-      mimetype: file.type,
-      size: file.size,
-    },
-  })
+    info: { mimetype: file.type, size: file.size },
+  } as any)
 }
 
 export async function loadRoomHistory(roomId: string): Promise<boolean> {
   if (!client) return false
   const room = client.getRoom(roomId)
   if (!room) return false
-
   useMessageStore.getState().setLoadingHistory(true)
-
   try {
     const timeline = room.getLiveTimeline()
-    const result = await client.paginateEventTimeline(timeline, { backwards: true, limit: 50 })
-
-    if (result) {
-      const events = timeline.getEvents()
-      const messages: MessageEvent[] = []
-      for (const event of events) {
-        const type = event.getType()
-        if (type === 'm.room.message') {
-          const msg = eventToMessage(event, roomId)
-          if (msg) messages.push(msg)
-        } else if (type === 'm.room.encrypted') {
-          if (event.isDecryptionFailure?.()) {
-            const msg = encryptedFallbackMessage(event, roomId)
-            if (msg) messages.push(msg)
-          }
-        }
-      }
-      useMessageStore.getState().setMessages(roomId, messages)
+    const before = timeline.getEvents().length
+    await client.scrollback(room, 30)
+    const events = timeline.getEvents()
+    const messages: MessageEvent[] = []
+    for (const event of events) {
+      if (event.getType() !== 'm.room.message' && event.getType() !== 'm.room.encrypted') continue
+      const msg = eventToMessage(event, roomId)
+      if (msg) messages.push(msg)
     }
-
-    return result
+    useMessageStore.getState().setMessages(roomId, messages)
+    return events.length > before
   } finally {
     useMessageStore.getState().setLoadingHistory(false)
   }
@@ -495,24 +398,13 @@ export async function loadInitialMessages(roomId: string): Promise<void> {
   if (!client) return
   const room = client.getRoom(roomId)
   if (!room) return
-
-  const timeline = room.getLiveTimeline()
-  const events = timeline.getEvents()
+  const events = room.getLiveTimeline().getEvents()
   const messages: MessageEvent[] = []
-
   for (const event of events) {
-    const type = event.getType()
-    if (type === 'm.room.message') {
-      const msg = eventToMessage(event, roomId)
-      if (msg) messages.push(msg)
-    } else if (type === 'm.room.encrypted') {
-      if (event.isDecryptionFailure?.()) {
-        const msg = encryptedFallbackMessage(event, roomId)
-        if (msg) messages.push(msg)
-      }
-    }
+    if (event.getType() !== 'm.room.message' && event.getType() !== 'm.room.encrypted') continue
+    const msg = eventToMessage(event, roomId)
+    if (msg) messages.push(msg)
   }
-
   useMessageStore.getState().setMessages(roomId, messages)
 }
 
@@ -520,115 +412,75 @@ export function loadRoomMembers(roomId: string): void {
   if (!client) return
   const room = client.getRoom(roomId)
   if (!room) return
-
-  try {
-    const matrixMembers = room.getJoinedMembers()
-    const baseUrl = client.baseUrl
-    const members: RoomMember[] = matrixMembers.map((m) => {
-      let avatarUrl: string | null = null
-      try {
-        avatarUrl = m.getAvatarUrl(baseUrl, 40, 40, 'crop', false, false, true) || null
-      } catch {
-        // ignore
-      }
-
-      return {
-        userId: m.userId,
-        displayName: m.name || m.userId,
-        avatarUrl,
-        membership: m.membership || 'join',
-        powerLevel: room.currentState.getStateEvents('m.room.power_levels')?.[0]
-          ?.getContent()?.users?.[m.userId] || 0,
-        presence: 'offline' as const,
-      }
-    })
-
-    members.sort((a, b) => {
-      if (a.powerLevel !== b.powerLevel) return b.powerLevel - a.powerLevel
-      return a.displayName.localeCompare(b.displayName)
-    })
-
-    useRoomStore.getState().setMembers(roomId, members)
-  } catch (err) {
-    console.error(`[WaifuTxT] loadRoomMembers error for ${roomId}:`, err)
-  }
+  const matrixMembers = room.getJoinedMembers()
+  const baseUrl = client.baseUrl
+  const members: RoomMember[] = matrixMembers.map((m) => {
+    let avatarUrl: string | null = null
+    try {
+      avatarUrl = m.getAvatarUrl(baseUrl, 40, 40, 'crop', false, false, true) || null
+    } catch {
+      // ignore
+    }
+    return {
+      userId: m.userId,
+      displayName: m.name || m.userId,
+      avatarUrl,
+      membership: m.membership || 'join',
+      powerLevel: room.currentState.getStateEvents('m.room.power_levels')?.[0]?.getContent()?.users?.[m.userId] || 0,
+      presence: 'offline',
+    }
+  })
+  useRoomStore.getState().setMembers(roomId, members)
 }
 
 export function sendTyping(roomId: string, typing: boolean): void {
   try {
     client?.sendTyping(roomId, typing, typing ? 10000 : 0)
   } catch {
-    // ignore typing errors
+    // ignore
   }
 }
 
 export async function restoreKeyBackup(recoveryKey: string): Promise<{ imported: number; total: number }> {
   if (!client) throw new Error('Client non initialisé')
-
   const crypto = client.getCrypto()
   if (!crypto) throw new Error('Module crypto non disponible')
 
-  console.log('[WaifuTxT] Starting key backup restore...')
-
   const { decodeRecoveryKey } = await import('matrix-js-sdk/lib/crypto-api/recovery-key')
-
-  let decodedKey: Uint8Array
-  try {
-    decodedKey = decodeRecoveryKey(recoveryKey.trim())
-    console.log('[WaifuTxT] Recovery key decoded, length:', decodedKey.length)
-  } catch (err) {
-    console.error('[WaifuTxT] Failed to decode recovery key:', err)
-    throw new Error('Clé de récupération invalide (format incorrect)')
-  }
-
+  const decodedKey = decodeRecoveryKey(recoveryKey.trim())
   const defaultKeyId = await client.secretStorage.getDefaultKeyId()
   if (!defaultKeyId) throw new Error('Aucune clé de secret storage configurée sur ce compte')
-
-  console.log('[WaifuTxT] Default SS key ID:', defaultKeyId)
-
-  const keyInfo = await client.secretStorage.getKey(defaultKeyId)
-  if (!keyInfo) throw new Error('Impossible de récupérer les infos de la clé de secret storage')
-
-  const valid = await client.secretStorage.checkKey(decodedKey, keyInfo[1] as import('matrix-js-sdk/lib/secret-storage').SecretStorageKeyDescriptionAesV1)
-  if (!valid) throw new Error('Clé de récupération incorrecte — ne correspond pas au secret storage')
-
-  console.log('[WaifuTxT] Recovery key verified against secret storage')
-
   pendingSecretStorageKey = { keyId: defaultKeyId, key: decodedKey }
-
   try {
     await crypto.loadSessionBackupPrivateKeyFromSecretStorage()
-    console.log('[WaifuTxT] Backup key loaded from secret storage')
-  } catch (err) {
-    console.error('[WaifuTxT] loadSessionBackupPrivateKeyFromSecretStorage failed:', err)
-    throw err
   } finally {
     pendingSecretStorageKey = null
   }
-
-  try {
-    console.log('[WaifuTxT] Calling restoreKeyBackup()...')
-    const result = await crypto.restoreKeyBackup()
-    console.log('[WaifuTxT] Restore result:', JSON.stringify(result))
-    return { imported: result?.imported ?? 0, total: result?.total ?? 0 }
-  } catch (err) {
-    console.error('[WaifuTxT] restoreKeyBackup() failed:', err)
-    throw err
-  }
+  const result = await crypto.restoreKeyBackup()
+  return { imported: result?.imported ?? 0, total: result?.total ?? 0 }
 }
 
-const decryptedUrlCache = new Map<string, string>()
-const decryptPromiseCache = new Map<string, Promise<string>>()
-const mediaBlobCache = new Map<string, string>()
-const mediaBlobPromiseCache = new Map<string, Promise<string | null>>()
+export async function shouldShowKeyBackupBanner(): Promise<boolean> {
+  if (!client) return false
+  const crypto = client.getCrypto()
+  if (!crypto) return false
+  try {
+    const activeBackupVersion = await crypto.getActiveSessionBackupVersion()
+    if (!activeBackupVersion) return true
+    const status = await crypto.getSecretStorageStatus()
+    return status.secretStorageKeyValidityMap?.['m.megolm_backup.v1'] !== true
+  } catch {
+    return true
+  }
+}
 
 function base64ToBytes(base64: string): Uint8Array {
   let b64 = base64.replace(/-/g, '+').replace(/_/g, '/')
   while (b64.length % 4 !== 0) b64 += '='
-  const binStr = atob(b64)
-  const bytes = new Uint8Array(binStr.length)
-  for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i)
-  return bytes
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
 }
 
 function buildAuthenticatedMediaUrl(mxcUrl: string): string | null {
@@ -640,90 +492,39 @@ function buildAuthenticatedMediaUrl(mxcUrl: string): string | null {
 }
 
 function appendAccessToken(url: string, accessToken: string): string {
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}access_token=${encodeURIComponent(accessToken)}`
+  return `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(accessToken)}`
 }
 
 export function getMediaUrlWithAccessToken(url: string): string | null {
   if (!client) return null
-  const accessToken = client.getAccessToken()
-  if (!accessToken) return null
-
+  const token = client.getAccessToken()
+  if (!token) return null
   if (url.startsWith('mxc://')) {
-    const authUrl = buildAuthenticatedMediaUrl(url)
-    return authUrl ? appendAccessToken(authUrl, accessToken) : null
+    const auth = buildAuthenticatedMediaUrl(url)
+    return auth ? appendAccessToken(auth, token) : null
   }
-
-  try {
-    const parsed = new URL(url)
-    const m = parsed.pathname.match(/^\/_matrix\/(?:client\/v1|media\/v3)\/(?:media\/)?download\/([^/]+)\/(.+)$/)
-    if (!m) return appendAccessToken(url, accessToken)
-    const [, serverName, mediaId] = m
-    const candidate = `${parsed.origin}/_matrix/client/v1/media/download/${serverName}/${mediaId}`
-    return appendAccessToken(candidate, accessToken)
-  } catch {
-    return appendAccessToken(url, accessToken)
-  }
+  return appendAccessToken(url, token)
 }
 
 export async function loadMediaWithAuth(url: string): Promise<string | null> {
   const cached = mediaBlobCache.get(url)
   if (cached) return cached
-
   const inflight = mediaBlobPromiseCache.get(url)
   if (inflight) return inflight
 
   const promise = (async () => {
-    if (!client) return null
-
-    const accessToken = client.getAccessToken()
-    let authUrl: string | null = null
-
-    if (url.startsWith('mxc://')) {
-      authUrl = buildAuthenticatedMediaUrl(url)
-    } else {
-      try {
-        const parsed = new URL(url)
-        const m = parsed.pathname.match(/^\/_matrix\/(?:client\/v1|media\/v3)\/(?:media\/)?download\/([^/]+)\/(.+)$/)
-        if (m) {
-          const [, serverName, mediaId] = m
-          authUrl = `${parsed.origin}/_matrix/client/v1/media/download/${serverName}/${mediaId}`
-        }
-      } catch {
-        // ignore malformed urls
-      }
-    }
-
-    const candidates = [authUrl, url].filter((u): u is string => !!u)
+    const tokenUrl = getMediaUrlWithAccessToken(url)
+    const candidates = [tokenUrl, url].filter((u): u is string => !!u)
     for (const candidate of candidates) {
       try {
-        const response = await fetch(candidate, {
-          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-        })
-        if (!response.ok) continue
-
-        const blob = await response.blob()
+        const res = await fetch(candidate)
+        if (!res.ok) continue
+        const blob = await res.blob()
         const blobUrl = URL.createObjectURL(blob)
         mediaBlobCache.set(url, blobUrl)
         return blobUrl
       } catch {
-        // try next candidate
-      }
-    }
-
-    if (accessToken) {
-      for (const candidate of candidates) {
-        try {
-          const response = await fetch(appendAccessToken(candidate, accessToken))
-          if (!response.ok) continue
-
-          const blob = await response.blob()
-          const blobUrl = URL.createObjectURL(blob)
-          mediaBlobCache.set(url, blobUrl)
-          return blobUrl
-        } catch {
-          // try next candidate
-        }
+        // continue
       }
     }
     return null
@@ -738,49 +539,34 @@ export async function decryptMediaUrl(file: EncryptedFileInfo): Promise<string> 
   const cacheKey = file.url
   const cached = decryptedUrlCache.get(cacheKey)
   if (cached) return cached
-
   const inflight = decryptPromiseCache.get(cacheKey)
   if (inflight) return inflight
 
   const promise = (async () => {
     if (!client) throw new Error('Client not initialized')
-
-    const accessToken = client.getAccessToken()
-    const authUrl = buildAuthenticatedMediaUrl(file.url)
-    const legacyUrl = client.mxcUrlToHttp(file.url)
-    const url = authUrl || legacyUrl
-    if (!url) throw new Error('Cannot resolve mxc URL: ' + file.url)
-
-    let response = await fetch(url, {
-      headers: accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {},
-    })
-
-    if (!response.ok && authUrl && legacyUrl && authUrl !== legacyUrl) {
-      response = await fetch(legacyUrl)
-    }
-
+    const authUrl =
+      getMediaUrlWithAccessToken(file.url) ||
+      buildAuthenticatedMediaUrl(file.url) ||
+      client.mxcUrlToHttp(file.url)
+    if (!authUrl) throw new Error('Cannot resolve media url')
+    // Important: avoid Authorization header here to prevent CORS preflight failures.
+    // Matrix web clients usually authenticate media via access_token query param.
+    const response = await fetch(authUrl)
     if (!response.ok) throw new Error(`Media download failed: ${response.status}`)
-
     const encryptedData = await response.arrayBuffer()
 
     const keyData = base64ToBytes(file.key.k)
     const iv = base64ToBytes(file.iv)
     const ivArray = new Uint8Array(16)
-    ivArray.set(iv.slice(0, 8))
-
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw', keyData, { name: 'AES-CTR' }, false, ['decrypt'],
-    )
-
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-CTR', counter: ivArray, length: 64 },
-      cryptoKey,
-      encryptedData,
-    )
-
-    const mimetype = file.url.endsWith('.png') ? 'image/png' : 'application/octet-stream'
-    const blob = new Blob([decrypted], { type: mimetype })
-    const blobUrl = URL.createObjectURL(blob)
+    if (iv.length >= 16) {
+      ivArray.set(iv.slice(0, 16))
+    } else if (iv.length > 0) {
+      ivArray.set(iv)
+    }
+    const keyBuffer = keyData.buffer.slice(keyData.byteOffset, keyData.byteOffset + keyData.byteLength) as ArrayBuffer
+    const cryptoKey = await crypto.subtle.importKey('raw', keyBuffer, { name: 'AES-CTR' }, false, ['decrypt'])
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-CTR', counter: ivArray, length: 64 }, cryptoKey, encryptedData)
+    const blobUrl = URL.createObjectURL(new Blob([decrypted]))
     decryptedUrlCache.set(cacheKey, blobUrl)
     return blobUrl
   })()
@@ -802,7 +588,7 @@ const previewCache = new Map<string, UrlPreviewData | null>()
 function normalizePreviewImageUrl(rawImage: string, pageUrl: string): string | undefined {
   if (!rawImage) return undefined
   if (rawImage.startsWith('mxc://')) {
-    return client?.mxcUrlToHttp(rawImage, 400, 200, 'scale') || undefined
+    return client?.mxcUrlToHttp(rawImage, 400, 200, 'scale', false, true, true) || undefined
   }
   if (rawImage.startsWith('http://') || rawImage.startsWith('https://')) return rawImage
   if (rawImage.startsWith('//')) return `https:${rawImage}`
@@ -813,31 +599,41 @@ function normalizePreviewImageUrl(rawImage: string, pageUrl: string): string | u
   }
 }
 
+function pickFirstString(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    const first = value.find((v) => typeof v === 'string')
+    return typeof first === 'string' ? first : undefined
+  }
+  return undefined
+}
+
 export async function getUrlPreview(url: string): Promise<UrlPreviewData | null> {
   const cached = previewCache.get(url)
   if (cached !== undefined) return cached
-
   if (!client) return null
-
   try {
     const data = await client.getUrlPreview(url, Date.now())
-    if (!data) { previewCache.set(url, null); return null }
+    if (!data) return null
+    const og = data as Record<string, unknown>
+    const imageCandidate =
+      pickFirstString(og['og:image']) ||
+      pickFirstString(og['og:image:url']) ||
+      pickFirstString(og['og:image:secure_url']) ||
+      pickFirstString(og['twitter:image']) ||
+      pickFirstString(og['twitter:image:src']) ||
+      pickFirstString(og['image'])
 
-    const ogData = data as Record<string, unknown>
-    const title = (ogData['og:title'] || ogData['title']) as string | undefined
-    const description = (ogData['og:description'] || ogData['description']) as string | undefined
-    const siteName = (ogData['og:site_name'] || ogData['site_name']) as string | undefined
-    const rawImage =
-      (ogData['og:image'] ||
-        ogData['og:image:url'] ||
-        ogData['twitter:image'] ||
-        ogData['image']) as string | undefined
-
-    if (!title && !description) { previewCache.set(url, null); return null }
-
-    const imageUrl = rawImage ? normalizePreviewImageUrl(rawImage, url) : undefined
-
-    const result: UrlPreviewData = { title, description, imageUrl, siteName }
+    const result: UrlPreviewData = {
+      title: pickFirstString(og['og:title']) || pickFirstString(og.title),
+      description: pickFirstString(og['og:description']) || pickFirstString(og.description),
+      siteName: pickFirstString(og['og:site_name']) || pickFirstString(og.site_name),
+      imageUrl: imageCandidate ? normalizePreviewImageUrl(imageCandidate, url) : undefined,
+    }
+    if (!result.title && !result.description) {
+      previewCache.set(url, null)
+      return null
+    }
     previewCache.set(url, result)
     return result
   } catch {
@@ -849,7 +645,7 @@ export async function getUrlPreview(url: string): Promise<UrlPreviewData | null>
 export function resolveAvatarUrl(mxcUrl: string | null, size = 48): string | null {
   if (!mxcUrl || !client) return null
   try {
-    return client.mxcUrlToHttp(mxcUrl, size, size, 'crop')
+    return client.mxcUrlToHttp(mxcUrl, size, size, 'crop', false, true) || null
   } catch {
     return null
   }

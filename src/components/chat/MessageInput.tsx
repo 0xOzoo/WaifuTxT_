@@ -22,7 +22,7 @@ export function MessageInput() {
   const [isSending, setIsSending] = useState(false)
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingImagesRef = useRef<PendingImage[]>([])
 
   const handleSend = useCallback(async () => {
@@ -61,7 +61,7 @@ export function MessageInput() {
     if (!activeRoomId) return
 
     sendTyping(activeRoomId, true)
-    clearTimeout(typingTimeoutRef.current)
+    if (typingTimeoutRef.current !== null) clearTimeout(typingTimeoutRef.current)
     typingTimeoutRef.current = setTimeout(() => {
       sendTyping(activeRoomId, false)
     }, 4000)

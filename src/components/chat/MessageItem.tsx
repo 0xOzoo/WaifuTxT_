@@ -1,7 +1,7 @@
 import { format, isToday, isYesterday } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { useState, useEffect, useCallback } from 'react'
-import type { MessageEvent, EncryptedFileInfo } from '../../types/matrix'
+import { useCallback, useEffect, useState } from 'react'
+import type { EncryptedFileInfo, MessageEvent } from '../../types/matrix'
 import { Avatar } from '../common/Avatar'
 import {
   decryptMediaUrl,
@@ -11,8 +11,8 @@ import {
   type UrlPreviewData,
 } from '../../lib/matrix'
 
-const URL_REGEX = /https?:\/\/[^\s<]+[^\s<.,;:!?"'\])}>]/g
-const TOKEN_REGEX = /(https?:\/\/[^\s<]+[^\s<.,;:!?"'\])}>]|<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?)/g
+const URL_REGEX = /https?:\/\/[^\s<>"']+/g
+const TOKEN_REGEX = /(https?:\/\/[^\s<>"']+|<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?)/g
 
 function mxidToMentionLabel(raw: string): string {
   const mxid = raw.replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '')
@@ -20,41 +20,49 @@ function mxidToMentionLabel(raw: string): string {
   return `@${localpart}`
 }
 
+function splitTrailingPunctuation(url: string): { cleanUrl: string; trailing: string } {
+  let cleanUrl = url
+  let trailing = ''
+  while (cleanUrl.length > 0 && /[)\]}.,;:!?]+$/.test(cleanUrl)) {
+    trailing = cleanUrl.slice(-1) + trailing
+    cleanUrl = cleanUrl.slice(0, -1)
+  }
+  return { cleanUrl, trailing }
+}
+
 function RichText({ text }: { text: string }) {
   const parts = text.split(TOKEN_REGEX)
   if (parts.length === 1) return <>{text}</>
-
   return (
     <>
       {parts.map((part, i) => {
         if (!part) return null
-
         if (part.startsWith('http://') || part.startsWith('https://')) {
+          const { cleanUrl, trailing } = splitTrailingPunctuation(part)
           return (
-            <a
-              key={i}
-              href={part}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-link hover:text-link-hover hover:underline break-all"
-            >
-              {part}
-            </a>
+            <span key={i}>
+              <a
+                href={cleanUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-link hover:text-link-hover hover:underline break-all"
+              >
+                {cleanUrl}
+              </a>
+              {trailing}
+            </span>
           )
         }
-
         if (part.startsWith('<@') || /^@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?$/.test(part)) {
-          const label = mxidToMentionLabel(part)
           return (
             <span
               key={i}
               className="inline-flex items-center rounded px-1 py-0.5 bg-mention-bg text-mention hover:bg-mention-hover-bg transition-colors"
             >
-              {label}
+              {mxidToMentionLabel(part)}
             </span>
           )
         }
-
         return <span key={i}>{part}</span>
       })}
     </>
@@ -62,41 +70,95 @@ function RichText({ text }: { text: string }) {
 }
 
 function extractUrls(text: string): string[] {
-  return text.match(URL_REGEX) || []
+  const raw = text.match(URL_REGEX) || []
+  const cleaned = raw.map((u) => splitTrailingPunctuation(u).cleanUrl).filter(Boolean)
+  return Array.from(new Set(cleaned))
+}
+
+function removeUrlsFromText(text: string): string {
+  const withoutUrls = text.replace(URL_REGEX, ' ')
+  return withoutUrls.replace(/\s+/g, ' ').trim()
+}
+
+function getFaviconUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    return `https://icons.duckduckgo.com/ip3/${parsed.hostname}.ico`
+  } catch {
+    return null
+  }
 }
 
 function LinkPreviewCard({ url }: { url: string }) {
   const [preview, setPreview] = useState<UrlPreviewData | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [imageFailed, setImageFailed] = useState(false)
+  const [faviconFailed, setFaviconFailed] = useState(false)
+  const [imageSrc, setImageSrc] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     getUrlPreview(url).then((data) => {
-      if (!cancelled) { setPreview(data); setLoaded(true) }
+      if (!cancelled) {
+        setPreview(data)
+        setImageSrc(data?.imageUrl || null)
+        setImageFailed(false)
+        setFaviconFailed(false)
+        setLoaded(true)
+      }
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [url])
 
-  if (!loaded || !preview) return null
+  if (!loaded) return null
+  const hostname = (() => {
+    try {
+      return new URL(url).hostname
+    } catch {
+      return ''
+    }
+  })()
+  const faviconUrl = getFaviconUrl(url)
 
-  const hostname = (() => { try { return new URL(url).hostname } catch { return '' } })()
+  const handlePreviewImageError = async () => {
+    if (!preview?.imageUrl) {
+      setImageFailed(true)
+      return
+    }
+    const recovered = await loadMediaWithAuth(preview.imageUrl)
+    if (recovered) {
+      setImageSrc(recovered)
+      return
+    }
+    setImageFailed(true)
+  }
 
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-1.5 flex rounded-lg overflow-hidden border border-border bg-bg-tertiary hover:border-accent-pink/50 transition-colors max-w-md cursor-pointer"
+      className="mt-1.5 flex rounded-lg overflow-hidden border border-border bg-bg-tertiary hover:border-accent-pink/50 transition-colors max-w-xl cursor-pointer"
     >
-      <div className="w-20 h-20 shrink-0 border-r border-border/60 bg-bg-hover/40 flex items-center justify-center">
-        {preview.imageUrl && !imageFailed ? (
+      <div className="w-24 h-24 shrink-0 border-r border-border/60 bg-bg-hover/40 flex items-center justify-center">
+        {imageSrc && !imageFailed ? (
           <img
-            src={preview.imageUrl}
+            src={imageSrc}
             alt=""
             className="w-full h-full object-cover"
             loading="lazy"
-            onError={() => setImageFailed(true)}
+            referrerPolicy="no-referrer"
+            onError={handlePreviewImageError}
+          />
+        ) : faviconUrl && !faviconFailed ? (
+          <img
+            src={faviconUrl}
+            alt=""
+            className="w-9 h-9 rounded-md object-contain opacity-80"
+            loading="lazy"
+            onError={() => setFaviconFailed(true)}
           />
         ) : (
           <svg className="w-6 h-6 text-text-muted/70" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
@@ -105,16 +167,20 @@ function LinkPreviewCard({ url }: { url: string }) {
         )}
       </div>
       <div className="p-2.5 min-w-0 flex-1">
-        {preview.siteName && (
+        {preview?.siteName && (
           <p className="text-[10px] text-text-muted uppercase tracking-wide truncate">{preview.siteName}</p>
         )}
-        {preview.title && (
-          <p className="text-xs font-semibold text-accent-pink truncate leading-snug">{preview.title}</p>
+        {preview?.title ? (
+          <p className="text-sm font-semibold text-accent-pink line-clamp-2 leading-snug">{preview.title}</p>
+        ) : (
+          <p className="text-sm font-semibold text-accent-pink line-clamp-1 leading-snug">{hostname || 'Lien'}</p>
         )}
-        {preview.description && (
-          <p className="text-[11px] text-text-secondary line-clamp-2 leading-snug mt-0.5">{preview.description}</p>
+        {preview?.description ? (
+          <p className="text-xs text-text-secondary line-clamp-4 leading-snug mt-0.5">{preview.description}</p>
+        ) : (
+          <p className="text-xs text-text-secondary line-clamp-2 leading-snug mt-0.5 break-all">{url}</p>
         )}
-        {!preview.siteName && hostname && (
+        {!preview?.siteName && hostname && (
           <p className="text-[10px] text-text-muted truncate mt-0.5">{hostname}</p>
         )}
       </div>
@@ -148,12 +214,15 @@ function useDecryptedUrl(encryptedFile?: EncryptedFileInfo): { url: string | nul
     let cancelled = false
     setError(false)
     decryptMediaUrl(encryptedFile)
-      .then((blobUrl) => { if (!cancelled) setUrl(blobUrl) })
-      .catch((err) => {
-        console.error('[WaifuTxT] Media decrypt error:', err)
+      .then((blobUrl) => {
+        if (!cancelled) setUrl(blobUrl)
+      })
+      .catch(() => {
         if (!cancelled) setError(true)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [encryptedFile?.url])
   return { url, error }
 }
@@ -187,7 +256,6 @@ function ImageWithFallback({
       setDisplaySrc(recovered)
       return
     }
-
     const tokenUrl = getMediaUrlWithAccessToken(src)
     if (tokenUrl) setDisplaySrc(tokenUrl)
   }
@@ -205,34 +273,22 @@ function ImageWithFallback({
 }
 
 function EncryptedImage({ message }: { message: MessageEvent }) {
-  const { url: decryptedUrl, error: mainError } = useDecryptedUrl(message.encryptedFile)
+  const { url: decryptedUrl, error } = useDecryptedUrl(message.encryptedFile)
   const { url: thumbUrl } = useDecryptedUrl(message.encryptedThumbnailFile)
   const displayUrl = decryptedUrl || thumbUrl
-
   const [fullscreen, setFullscreen] = useState(false)
 
-  if (mainError && !displayUrl) {
+  if (error && !displayUrl) {
     return (
-      <div className="mt-1 p-3 rounded-lg bg-bg-tertiary border border-border text-text-muted text-xs flex items-center gap-2 max-w-sm">
-        <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
-        </svg>
+      <div className="mt-1 p-3 rounded-lg bg-bg-tertiary border border-border text-text-muted text-xs">
         Image chiffrée — impossible de déchiffrer
       </div>
     )
   }
 
   if (!displayUrl) {
-    const w = message.imageInfo?.w
-    const h = message.imageInfo?.h
-    const aspect = w && h ? w / h : 16 / 9
-    const displayW = Math.min(w || 400, 512)
-    const displayH = displayW / aspect
     return (
-      <div
-        className="mt-1 rounded-lg bg-bg-tertiary animate-pulse flex items-center justify-center"
-        style={{ width: displayW, height: displayH, maxHeight: 320 }}
-      >
+      <div className="mt-1 rounded-lg bg-bg-tertiary animate-pulse flex items-center justify-center" style={{ width: 360, height: 220 }}>
         <svg className="w-6 h-6 text-text-muted" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
         </svg>
@@ -243,23 +299,11 @@ function EncryptedImage({ message }: { message: MessageEvent }) {
   return (
     <>
       <div className="mt-1 max-w-lg">
-        <ImageWithFallback
-          src={displayUrl}
-          alt={message.content}
-          className="rounded-lg max-h-80 object-contain cursor-pointer hover:opacity-90 transition-opacity"
-          onClick={() => setFullscreen(true)}
-        />
+        <ImageWithFallback src={displayUrl} alt={message.content} className="rounded-lg max-h-80 object-contain cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setFullscreen(true)} />
       </div>
       {fullscreen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer"
-          onClick={() => setFullscreen(false)}
-        >
-          <img
-            src={decryptedUrl || displayUrl}
-            alt={message.content}
-            className="max-w-[90vw] max-h-[90vh] object-contain"
-          />
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer" onClick={() => setFullscreen(false)}>
+          <img src={decryptedUrl || displayUrl} alt={message.content} className="max-w-[90vw] max-h-[90vh] object-contain" />
         </div>
       )}
     </>
@@ -269,7 +313,6 @@ function EncryptedImage({ message }: { message: MessageEvent }) {
 function FileAttachment({ message }: { message: MessageEvent }) {
   const { url: decryptedUrl } = useDecryptedUrl(message.encryptedFile)
   const url = message.fileUrl || decryptedUrl
-
   const handleClick = useCallback(() => {
     if (!url) return
     const a = document.createElement('a')
@@ -289,99 +332,10 @@ function FileAttachment({ message }: { message: MessageEvent }) {
       </svg>
       <div className="min-w-0">
         <div className="text-sm text-accent-pink font-medium truncate">{message.fileName || message.content}</div>
-        {message.fileSize != null && (
-          <div className="text-xs text-text-muted">{formatFileSize(message.fileSize)}</div>
-        )}
-        {!url && message.encryptedFile && (
-          <div className="text-xs text-text-muted">Déchiffrement...</div>
-        )}
+        {message.fileSize != null && <div className="text-xs text-text-muted">{formatFileSize(message.fileSize)}</div>}
+        {!url && message.encryptedFile && <div className="text-xs text-text-muted">Déchiffrement...</div>}
       </div>
     </button>
-  )
-}
-
-export function MessageItem({ message, showHeader }: MessageItemProps) {
-  const isMediaType = message.type === 'm.image' || message.type === 'm.video' || message.type === 'm.audio' || message.type === 'm.file'
-
-  return (
-    <div className={`group flex gap-4 px-4 py-0.5 hover:bg-bg-hover/30 transition-colors ${showHeader ? 'mt-4' : ''}`}>
-      {showHeader ? (
-        <Avatar src={message.senderAvatar} name={message.senderName} size={40} className="mt-0.5" />
-      ) : (
-        <div className="w-10 shrink-0 flex items-center justify-center">
-          <span className="text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
-            {format(new Date(message.timestamp), 'HH:mm')}
-          </span>
-        </div>
-      )}
-
-      <div className="flex-1 min-w-0">
-        {showHeader && (
-          <div className="flex items-baseline gap-2">
-            <span className="font-semibold text-sm text-text-primary hover:underline cursor-pointer">
-              {message.senderName}
-            </span>
-            <span className="text-[11px] text-text-muted">{formatTimestamp(message.timestamp)}</span>
-            {message.isEdited && <span className="text-[10px] text-text-muted">(modifié)</span>}
-          </div>
-        )}
-
-        {message.type === 'm.image' && (message.imageUrl || message.encryptedFile) && (
-          message.encryptedFile
-            ? <EncryptedImage message={message} />
-            : (
-              <div className="mt-1 max-w-lg">
-                <ImageWithFallback
-                  src={message.imageUrl}
-                  alt={message.content}
-                  className="rounded-lg max-h-80 object-contain cursor-pointer hover:opacity-90 transition-opacity"
-                  loading="lazy"
-                />
-              </div>
-            )
-        )}
-
-        {message.type === 'm.video' && (message.fileUrl || message.encryptedFile) && (
-          <VideoAttachment message={message} />
-        )}
-
-        {(message.type === 'm.file' || message.type === 'm.audio') && (message.fileUrl || message.encryptedFile) && (
-          <FileAttachment message={message} />
-        )}
-
-        {(message.type === 'm.text' || message.type === 'm.notice' || message.type === 'm.emote') && (
-          <>
-            <p className={`text-sm leading-relaxed break-words ${
-              message.type === 'm.notice' ? 'text-text-muted italic' : 'text-text-primary'
-            }`}>
-              {message.type === 'm.emote' && (
-                <span className="text-text-secondary italic">* {message.senderName} </span>
-              )}
-              {message.content.startsWith('🔒') ? (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-bg-tertiary rounded text-text-muted text-xs italic">
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
-                  </svg>
-                  Message chiffré — clé de récupération requise
-                </span>
-              ) : <RichText text={message.content} />}
-            </p>
-            {extractUrls(message.content).slice(0, 3).map((linkUrl) => (
-              <LinkPreviewCard key={linkUrl} url={linkUrl} />
-            ))}
-          </>
-        )}
-
-        {!isMediaType && message.type !== 'm.text' && message.type !== 'm.notice' && message.type !== 'm.emote' && message.content && (
-          <>
-            <p className="text-sm text-text-primary leading-relaxed break-words"><RichText text={message.content} /></p>
-            {extractUrls(message.content).slice(0, 3).map((linkUrl) => (
-              <LinkPreviewCard key={linkUrl} url={linkUrl} />
-            ))}
-          </>
-        )}
-      </div>
-    </div>
   )
 }
 
@@ -403,13 +357,91 @@ function VideoAttachment({ message }: { message: MessageEvent }) {
 
   return (
     <div className="mt-1 max-w-lg">
-      <video
-        src={videoUrl}
-        poster={posterUrl || undefined}
-        controls
-        className="rounded-lg max-h-80"
-        preload="metadata"
-      />
+      <video src={videoUrl} poster={posterUrl || undefined} controls className="rounded-lg max-h-80" preload="metadata" />
+    </div>
+  )
+}
+
+export function MessageItem({ message, showHeader }: MessageItemProps) {
+  const isMediaType = message.type === 'm.image' || message.type === 'm.video' || message.type === 'm.audio' || message.type === 'm.file'
+  const urls = extractUrls(message.content)
+  const contentWithoutUrls = removeUrlsFromText(message.content)
+
+  return (
+    <div className={`group flex gap-4 px-4 py-0.5 hover:bg-bg-hover/30 transition-colors ${showHeader ? 'mt-4' : ''}`}>
+      {showHeader ? (
+        <Avatar src={message.senderAvatar} name={message.senderName} size={40} className="mt-0.5" />
+      ) : (
+        <div className="w-10 shrink-0 flex items-center justify-center">
+          <span className="text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
+            {format(new Date(message.timestamp), 'HH:mm')}
+          </span>
+        </div>
+      )}
+
+      <div className="flex-1 min-w-0">
+        {showHeader && (
+          <div className="flex items-baseline gap-2">
+            <span className="font-semibold text-sm text-text-primary hover:underline cursor-pointer">{message.senderName}</span>
+            <span className="text-[11px] text-text-muted">{formatTimestamp(message.timestamp)}</span>
+            {message.isEdited && <span className="text-[10px] text-text-muted">(modifié)</span>}
+          </div>
+        )}
+
+        {message.type === 'm.image' && (message.imageUrl || message.encryptedFile) && (
+          message.encryptedFile ? (
+            <EncryptedImage message={message} />
+          ) : (
+            <div className="mt-1 max-w-lg">
+              <ImageWithFallback
+                src={message.imageUrl!}
+                alt={message.content}
+                className="rounded-lg max-h-80 object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                loading="lazy"
+              />
+            </div>
+          )
+        )}
+
+        {message.type === 'm.video' && (message.fileUrl || message.encryptedFile) && <VideoAttachment message={message} />}
+        {(message.type === 'm.file' || message.type === 'm.audio') && (message.fileUrl || message.encryptedFile) && (
+          <FileAttachment message={message} />
+        )}
+
+        {(message.type === 'm.text' || message.type === 'm.notice' || message.type === 'm.emote') && (
+          <>
+            {(message.content.startsWith('🔒') || contentWithoutUrls.length > 0) && (
+              <p className={`text-sm leading-relaxed break-words ${message.type === 'm.notice' ? 'text-text-muted italic' : 'text-text-primary'}`}>
+                {message.type === 'm.emote' && <span className="text-text-secondary italic">* {message.senderName} </span>}
+                {message.content.startsWith('🔒') ? (
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-bg-tertiary rounded text-text-muted text-xs italic">
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                    </svg>
+                    Message chiffré — clé de récupération requise
+                  </span>
+                ) : (
+                  <RichText text={contentWithoutUrls} />
+                )}
+              </p>
+            )}
+            {urls.slice(0, 3).map((linkUrl) => (
+              <LinkPreviewCard key={linkUrl} url={linkUrl} />
+            ))}
+          </>
+        )}
+
+        {!isMediaType && message.type !== 'm.text' && message.type !== 'm.notice' && message.type !== 'm.emote' && message.content && (
+          <>
+            {contentWithoutUrls.length > 0 && (
+              <p className="text-sm text-text-primary leading-relaxed break-words"><RichText text={contentWithoutUrls} /></p>
+            )}
+            {urls.slice(0, 3).map((linkUrl) => (
+              <LinkPreviewCard key={linkUrl} url={linkUrl} />
+            ))}
+          </>
+        )}
+      </div>
     </div>
   )
 }
