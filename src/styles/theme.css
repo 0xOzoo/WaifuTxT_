@@ -59,3 +59,125 @@
     @apply text-text-muted;
   }
 }
+
+@keyframes avatar-liquid-to-rounded {
+  0% {
+    border-radius: 9999px;
+    transform: scale(1);
+  }
+  8% {
+    border-radius: 70% 30% 62% 38% / 40% 62% 38% 60%;
+    transform: scale(0.99, 1.01);
+  }
+  16% {
+    border-radius: 62% 38% 56% 44% / 44% 60% 40% 56%;
+    transform: scale(0.97, 1.02);
+  }
+  24% {
+    border-radius: 58% 42% 51% 49% / 50% 56% 44% 50%;
+    transform: scale(0.95, 1.03);
+  }
+  32% {
+    border-radius: 55% 45% 48% 52% / 46% 56% 44% 54%;
+    transform: scale(0.94, 1.03);
+  }
+  40% {
+    border-radius: 51% 49% 41% 59% / 54% 48% 52% 46%;
+    transform: scale(0.98, 1.01);
+  }
+  48% {
+    border-radius: 46% 54% 37% 63% / 58% 41% 59% 42%;
+    transform: scale(1.02, 0.98);
+  }
+  56% {
+    border-radius: 40% 52% 33% 67% / 61% 36% 64% 39%;
+    transform: scale(1.03, 0.97);
+  }
+  64% {
+    border-radius: 28% 40% 34% 66% / 60% 36% 64% 40%;
+    transform: scale(1.03, 0.97);
+  }
+  72% {
+    border-radius: 24% 36% 30% 70% / 63% 34% 66% 37%;
+    transform: scale(1.02, 0.98);
+  }
+  82% {
+    border-radius: 20% 33% 26% 74% / 64% 32% 68% 36%;
+    transform: scale(1.01, 0.99);
+  }
+  90% {
+    border-radius: 18% 29% 24% 76% / 66% 30% 70% 34%;
+    transform: scale(1.005, 0.995);
+  }
+  100% {
+    border-radius: 0.75rem;
+    transform: scale(1);
+  }
+}
+
+@keyframes avatar-liquid-to-circle {
+  0% {
+    border-radius: 0.75rem;
+    transform: scale(1);
+  }
+  8% {
+    border-radius: 20% 35% 26% 74% / 60% 34% 66% 40%;
+    transform: scale(1.01, 0.99);
+  }
+  16% {
+    border-radius: 24% 39% 30% 70% / 62% 36% 64% 38%;
+    transform: scale(1.02, 0.98);
+  }
+  24% {
+    border-radius: 30% 46% 37% 63% / 58% 40% 60% 42%;
+    transform: scale(1.03, 0.97);
+  }
+  32% {
+    border-radius: 35% 65% 42% 58% / 58% 40% 60% 42%;
+    transform: scale(1.03, 0.96);
+  }
+  40% {
+    border-radius: 42% 58% 49% 51% / 50% 50% 50% 50%;
+    transform: scale(1.01, 0.99);
+  }
+  48% {
+    border-radius: 48% 52% 58% 42% / 41% 58% 42% 59%;
+    transform: scale(0.98, 1.02);
+  }
+  56% {
+    border-radius: 58% 42% 64% 36% / 36% 62% 38% 64%;
+    transform: scale(0.97, 1.03);
+  }
+  64% {
+    border-radius: 65% 35% 55% 45% / 45% 60% 40% 55%;
+    transform: scale(0.96, 1.03);
+  }
+  72% {
+    border-radius: 72% 28% 66% 34% / 34% 68% 32% 66%;
+    transform: scale(0.97, 1.02);
+  }
+  82% {
+    border-radius: 82% 18% 79% 21% / 24% 77% 23% 76%;
+    transform: scale(0.99, 1.01);
+  }
+  90% {
+    border-radius: 90% 10% 86% 14% / 18% 84% 16% 82%;
+    transform: scale(0.995, 1.005);
+  }
+  100% {
+    border-radius: 9999px;
+    transform: scale(1);
+  }
+}
+
+@layer utilities {
+  .avatar-liquid-to-rounded {
+    animation: avatar-liquid-to-rounded 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: border-radius, transform;
+  }
+
+  .avatar-liquid-to-circle {
+    animation: avatar-liquid-to-circle 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    will-change: border-radius, transform;
+  }
+}

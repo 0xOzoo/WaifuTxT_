@@ -7,6 +7,7 @@ interface AvatarProps {
   size?: number
   className?: string
   status?: 'online' | 'offline' | 'unavailable' | null
+  shape?: 'circle' | 'rounded'
 }
 
 function getInitials(name: string): string {
@@ -27,13 +28,16 @@ function hashColor(name: string): string {
   return colors[Math.abs(hash) % colors.length]
 }
 
-export function Avatar({ src, name, size = 40, className = '', status }: AvatarProps) {
+export function Avatar({ src, name, size = 40, className = '', status, shape = 'circle' }: AvatarProps) {
   const initials = getInitials(name)
   const bgColor = hashColor(name)
   const [displaySrc, setDisplaySrc] = useState<string | null>(src)
   const [showFallback, setShowFallback] = useState(!src)
   const [triedAuthFallback, setTriedAuthFallback] = useState(false)
+  const [morphClass, setMorphClass] = useState('')
   const blobUrlRef = useRef<string | null>(null)
+  const prevShapeRef = useRef(shape)
+  const avatarRadiusClass = shape === 'rounded' ? 'rounded-xl' : 'rounded-full'
 
   useEffect(() => {
     setDisplaySrc(src)
@@ -46,6 +50,15 @@ export function Avatar({ src, name, size = 40, className = '', status }: AvatarP
       if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (prevShapeRef.current === shape) return
+    const nextMorph = shape === 'rounded' ? 'avatar-liquid-to-rounded' : 'avatar-liquid-to-circle'
+    setMorphClass(nextMorph)
+    const timeout = setTimeout(() => setMorphClass(''), 420)
+    prevShapeRef.current = shape
+    return () => clearTimeout(timeout)
+  }, [shape])
 
   const tryAuthenticatedFallback = async () => {
     if (!displaySrc) return false
@@ -87,12 +100,12 @@ export function Avatar({ src, name, size = 40, className = '', status }: AvatarP
         <img
           src={displaySrc}
           alt={name}
-          className="w-full h-full rounded-full object-cover"
+          className={`w-full h-full object-cover transition-[border-radius,transform] duration-100 ease-out ${avatarRadiusClass} ${morphClass}`}
           onError={handleImageError}
         />
       ) : null}
       <div
-        className={`w-full h-full rounded-full flex items-center justify-center text-white font-semibold ${displaySrc && !showFallback ? 'hidden' : ''}`}
+        className={`w-full h-full ${avatarRadiusClass} flex items-center justify-center text-white font-semibold transition-[border-radius,transform] duration-100 ease-out ${morphClass} ${displaySrc && !showFallback ? 'hidden' : ''}`}
         style={{ backgroundColor: bgColor, fontSize: size * 0.4 }}
       >
         {initials}

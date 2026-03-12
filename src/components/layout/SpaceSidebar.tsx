@@ -17,11 +17,14 @@ export function SpaceSidebar() {
     <div className="w-[72px] bg-bg-primary flex flex-col items-center py-3 gap-2 overflow-y-auto border-r border-border">
       <Tooltip content="Messages directs">
         <button
+          onMouseDown={(e) => {
+            if (e.button === 0) setActiveSpace(null)
+          }}
           onClick={() => setActiveSpace(null)}
-          className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200 cursor-pointer ${
+          className={`w-12 h-12 flex items-center justify-center transition-[border-radius,background-color,color,box-shadow,transform] duration-100 ease-[cubic-bezier(0.22,1,0.36,1)] cursor-pointer ${
             activeSpaceId === null
               ? 'bg-accent-pink rounded-xl text-white'
-              : 'bg-bg-tertiary text-text-secondary hover:bg-accent-pink hover:text-white hover:rounded-xl'
+              : 'bg-bg-tertiary text-text-secondary rounded-full hover:bg-accent-pink hover:text-white'
           }`}
         >
           <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
@@ -35,14 +38,22 @@ export function SpaceSidebar() {
       {spaces.map((space) => (
         <Tooltip key={space.roomId} content={space.name}>
           <button
+            onMouseDown={(e) => {
+              if (e.button === 0) setActiveSpace(space.roomId)
+            }}
             onClick={() => setActiveSpace(space.roomId)}
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200 cursor-pointer overflow-hidden ${
+            className={`w-12 h-12 flex items-center justify-center transition-[border-radius,box-shadow,transform] duration-100 ease-[cubic-bezier(0.22,1,0.36,1)] cursor-pointer overflow-hidden ${
               activeSpaceId === space.roomId
                 ? 'rounded-xl ring-2 ring-accent-pink'
-                : 'hover:rounded-xl'
+                : 'rounded-full'
             }`}
           >
-            <Avatar src={space.avatarUrl} name={space.name} size={48} />
+            <Avatar
+              src={space.avatarUrl}
+              name={space.name}
+              size={48}
+              shape={activeSpaceId === space.roomId ? 'rounded' : 'circle'}
+            />
           </button>
         </Tooltip>
       ))}
