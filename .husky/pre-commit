@@ -1,2 +1,8 @@
-# Version bump moved to commit-msg hook.
-:
+# Run the version bump before commit object creation,
+# so package files are included in the same commit.
+if [ -f .git/COMMIT_EDITMSG ]; then
+  npm run version:auto -- .git/COMMIT_EDITMSG
+else
+  npm run version:bump
+fi
+git add package.json package-lock.json

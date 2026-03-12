@@ -1,1 +1,2 @@
-npm run version:auto -- "$1"
+# Version bump handled in pre-commit.
+:
