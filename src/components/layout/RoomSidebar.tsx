@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useRoomStore } from '../../stores/roomStore'
 import { Avatar } from '../common/Avatar'
 import { useAuthStore } from '../../stores/authStore'
 import { useUiStore } from '../../stores/uiStore'
+import { getOwnAvatarUrl } from '../../lib/matrix'
 
 function isVoiceRoom(room: { roomType?: string; name: string; topic: string }): boolean {
   const maybeVoice = room as { isVoice?: boolean; roomType?: string; name: string; topic: string }
@@ -23,6 +24,19 @@ export function RoomSidebar() {
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
+  const [ownAvatarUrl, setOwnAvatarUrl] = useState<string | null>(null)
+  const avatarFetched = useRef(false)
+
+  // Re-run on every rooms update until we find a URL (member data arrives
+  // progressively during sync — stop as soon as we get one).
+  useEffect(() => {
+    if (avatarFetched.current) return
+    const url = getOwnAvatarUrl()
+    if (url) {
+      setOwnAvatarUrl(url)
+      avatarFetched.current = true
+    }
+  }, [rooms])
 
   const displayRooms = useMemo(() => {
     const allRooms = Array.from(rooms.values())
@@ -113,7 +127,7 @@ export function RoomSidebar() {
           title="Ouvrir les paramètres"
           aria-label="Ouvrir les paramètres"
         >
-          <Avatar src={null} name={session?.userId || '?'} size={32} status="online" />
+          <Avatar src={ownAvatarUrl} name={session?.userId || '?'} size={32} status="online" />
           <div className="min-w-0 text-left">
             <div className="text-sm font-semibold truncate text-text-primary leading-tight">
               {session?.userId?.split(':')[0]?.replace('@', '') || ''}
