@@ -576,6 +576,54 @@ export async function restoreKeyBackup(recoveryKey: string): Promise<{ imported:
   return { imported: result?.imported ?? 0, total: result?.total ?? 0 }
 }
 
+export interface DeviceInfo {
+  deviceId: string
+  displayName: string
+  lastSeenIp: string | null
+  lastSeenTs: number | null
+  isCurrentDevice: boolean
+}
+
+export async function getSessions(): Promise<DeviceInfo[]> {
+  if (!client) return []
+  const myDeviceId = client.getDeviceId()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const response = await (client as any).getDevices()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (response.devices ?? []).map((d: any) => ({
+    deviceId: d.device_id,
+    displayName: d.display_name || d.device_id,
+    lastSeenIp: d.last_seen_ip ?? null,
+    lastSeenTs: d.last_seen_ts ?? null,
+    isCurrentDevice: d.device_id === myDeviceId,
+  }))
+}
+
+export async function renameSession(deviceId: string, name: string): Promise<void> {
+  if (!client) throw new Error('Client non initialisé')
+  await client.setDeviceDetails(deviceId, { display_name: name })
+}
+
+export async function deleteSession(deviceId: string, password: string): Promise<void> {
+  if (!client) throw new Error('Client non initialisé')
+  const userId = client.getUserId()
+  if (!userId) throw new Error('Utilisateur non identifié')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const c = client as any
+  try {
+    await c.deleteDevice(deviceId)
+  } catch (err: unknown) {
+    const e = err as { httpStatus?: number; status?: number; data?: { session?: string } }
+    if (e?.httpStatus !== 401 && e?.status !== 401) throw err
+    await c.deleteDevice(deviceId, {
+      type: 'm.login.password',
+      identifier: { type: 'm.id.user', user: userId },
+      password,
+      session: e?.data?.session,
+    })
+  }
+}
+
 export async function isSessionVerified(): Promise<boolean> {
   if (!client) return false
   const crypto = client.getCrypto()
