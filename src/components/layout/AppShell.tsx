@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { SpaceSidebar } from './SpaceSidebar'
 import { RoomSidebar } from './RoomSidebar'
 import { MemberPanel } from './MemberPanel'
+import { SettingsModal } from './SettingsModal'
 import { ChatArea } from '../chat/ChatArea'
 import { useUiStore } from '../../stores/uiStore'
 import { useRoomStore } from '../../stores/roomStore'
@@ -9,6 +10,7 @@ import { loadRoomMembers } from '../../lib/matrix'
 
 export function AppShell() {
   const showMemberPanel = useUiStore((s) => s.showMemberPanel)
+  const showSettingsModal = useUiStore((s) => s.showSettingsModal)
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
 
   useEffect(() => {
@@ -23,6 +25,7 @@ export function AppShell() {
       <RoomSidebar />
       <ChatArea />
       {showMemberPanel && activeRoomId && <MemberPanel />}
+      {showSettingsModal && <SettingsModal />}
     </div>
   )
 }

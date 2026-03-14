@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useRoomStore } from '../../stores/roomStore'
 import { Avatar } from '../common/Avatar'
 import { useAuthStore } from '../../stores/authStore'
-import { logout } from '../../lib/matrix'
+import { useUiStore } from '../../stores/uiStore'
 
 function isVoiceRoom(room: { roomType?: string; name: string; topic: string }): boolean {
   const maybeVoice = room as { isVoice?: boolean; roomType?: string; name: string; topic: string }
@@ -15,11 +15,14 @@ function isVoiceRoom(room: { roomType?: string; name: string; topic: string }): 
 
 export function RoomSidebar() {
   const [search, setSearch] = useState('')
+  const [isMuted, setIsMuted] = useState(false)
+  const [isDeafened, setIsDeafened] = useState(false)
   const rooms = useRoomStore((s) => s.rooms)
   const activeSpaceId = useRoomStore((s) => s.activeSpaceId)
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
   const session = useAuthStore((s) => s.session)
+  const setSettingsModal = useUiStore((s) => s.setSettingsModal)
 
   const displayRooms = useMemo(() => {
     const allRooms = Array.from(rooms.values())
@@ -103,23 +106,84 @@ export function RoomSidebar() {
         )}
       </div>
 
-      <div className="h-13 px-2 flex items-center gap-2 bg-bg-primary/50 border-t border-border">
-        <Avatar src={null} name={session?.userId || '?'} size={32} status="online" />
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium truncate text-text-primary">
-            {session?.userId?.split(':')[0]?.replace('@', '') || ''}
-          </div>
-          <div className="text-[10px] text-text-muted truncate">En ligne</div>
-        </div>
+      <div className="relative -left-[72px] w-[calc(100%+72px)] h-14 pl-[80px] pr-2 flex items-center gap-2 bg-bg-tertiary/95 border-t border-border">
         <button
-          onClick={() => logout()}
-          className="p-1.5 text-text-muted hover:text-danger transition-colors rounded cursor-pointer"
-          title="Déconnexion"
+          onClick={() => setSettingsModal(true)}
+          className="flex items-center gap-2 min-w-0 flex-1 px-1.5 py-1 rounded-md hover:bg-bg-hover/70 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-pink"
+          title="Ouvrir les paramètres"
+          aria-label="Ouvrir les paramètres"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
+          <Avatar src={null} name={session?.userId || '?'} size={32} status="online" />
+          <div className="min-w-0 text-left">
+            <div className="text-sm font-semibold truncate text-text-primary leading-tight">
+              {session?.userId?.split(':')[0]?.replace('@', '') || ''}
+            </div>
+            <div className="text-[11px] text-text-muted truncate leading-tight">En ligne</div>
+          </div>
         </button>
+
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setIsMuted((v) => !v)}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+              isMuted
+                ? 'text-danger bg-danger/10 hover:bg-danger/20'
+                : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'
+            }`}
+            title={isMuted ? 'Activer le micro' : 'Couper le micro'}
+            aria-label={isMuted ? 'Activer le micro' : 'Couper le micro'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              {isMuted ? (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9v3a3 3 0 006 0V9m-3 8v3m-4-3a7 7 0 008 0M3 3l18 18" />
+                </>
+              ) : (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 11-14 0m7 7v3" />
+                </>
+              )}
+            </svg>
+          </button>
+
+          <button
+            onClick={() => setIsDeafened((v) => !v)}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+              isDeafened
+                ? 'text-danger bg-danger/10 hover:bg-danger/20'
+                : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'
+            }`}
+            title={isDeafened ? 'Activer l’audio' : 'Désactiver l’audio'}
+            aria-label={isDeafened ? 'Activer l’audio' : 'Désactiver l’audio'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              {isDeafened ? (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 8.5L7.5 11H5v2h2.5l3.5 3.5V8.5zM16 8a5 5 0 012 4 5 5 0 01-.6 2.4" />
+                </>
+              ) : (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5L6 9H3v6h3l5 4V5z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.5 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12" />
+                </>
+              )}
+            </svg>
+          </button>
+
+          <button
+            onClick={() => setSettingsModal(true)}
+            className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover/80 transition-colors cursor-pointer"
+            title="Paramètres utilisateur"
+            aria-label="Paramètres utilisateur"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317a1.724 1.724 0 013.35 0 1.724 1.724 0 002.573 1.066 1.724 1.724 0 012.353.994 1.724 1.724 0 001.724 2.99 1.724 1.724 0 010 3.266 1.724 1.724 0 00-1.724 2.99 1.724 1.724 0 01-2.353.994 1.724 1.724 0 00-2.573 1.066 1.724 1.724 0 01-3.35 0 1.724 1.724 0 00-2.573-1.066 1.724 1.724 0 01-2.353-.994 1.724 1.724 0 00-1.724-2.99 1.724 1.724 0 010-3.266 1.724 1.724 0 001.724-2.99 1.724 1.724 0 012.353-.994 1.724 1.724 0 002.573-1.066z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   )
