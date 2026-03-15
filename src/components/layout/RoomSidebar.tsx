@@ -32,6 +32,16 @@ export function RoomSidebar() {
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
   const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
+  const updatePresence = useRoomStore((s) => s.updatePresence)
+  const [showPresenceMenu, setShowPresenceMenu] = useState(false)
+  const [ownPresence, setOwnPresenceStore] = useState<PresenceValue>(() => {
+    const stored = localStorage.getItem('waifutxt_presence')
+    if (stored === 'online' || stored === 'unavailable' || stored === 'offline') return stored
+    return 'online'
+  })
+  const presenceMenuRef = useRef<HTMLDivElement>(null)
+  const myUserId = session?.userId
+  const ownAvatarUrl = getOwnAvatarUrl()
 
   // Close presence menu on outside click
   useEffect(() => {
@@ -45,6 +55,7 @@ export function RoomSidebar() {
 
   const handleSetPresence = async (presence: PresenceValue) => {
     setOwnPresenceStore(presence)
+    localStorage.setItem('waifutxt_presence', presence)
     if (myUserId) updatePresence(myUserId, presence)
     setShowPresenceMenu(false)
     await setOwnPresence(presence)
