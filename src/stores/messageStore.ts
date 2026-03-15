@@ -8,6 +8,7 @@ interface MessageState {
   receiptsVersion: number
 
   addMessage: (roomId: string, message: MessageEvent) => void
+  removeMessage: (roomId: string, eventId: string) => void
   replaceMessage: (roomId: string, eventId: string, message: MessageEvent) => void
   setMessages: (roomId: string, messages: MessageEvent[]) => void
   prependMessages: (roomId: string, messages: MessageEvent[]) => void
@@ -33,6 +34,16 @@ export const useMessageStore = create<MessageState>((set, get) => ({
       allMessages.set(roomId, [...roomMessages, message])
       set({ messages: allMessages })
     }
+  },
+
+  removeMessage: (roomId, eventId) => {
+    const allMessages = new Map(get().messages)
+    const roomMessages = allMessages.get(roomId)
+    if (!roomMessages) return
+    const filtered = roomMessages.filter((m) => m.eventId !== eventId)
+    if (filtered.length === roomMessages.length) return
+    allMessages.set(roomId, filtered)
+    set({ messages: allMessages })
   },
 
   replaceMessage: (roomId, eventId, message) => {

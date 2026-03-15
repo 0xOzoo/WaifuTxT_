@@ -25,6 +25,7 @@ import {
   getMessageReadersAtEvent,
   getMediaUrlWithAccessToken,
   getOrCreateDmRoom,
+  sendEditMessage,
   getUrlPreview,
   loadMediaWithAuth,
   type UrlPreviewData,
@@ -663,6 +664,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   )
   const session = useAuthStore((s) => s.session)
   const receiptsVersion = useMessageStore((s) => s.receiptsVersion)
+  const replaceMessage = useMessageStore((s) => s.replaceMessage)
   const membersMap = useRoomStore((s) => s.members)
   const roomMembers = useMemo(() => membersMap.get(message.roomId) || [], [membersMap, message.roomId])
   const senderMember = useMemo(
@@ -670,6 +672,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
     [roomMembers, message.sender],
   )
   const isOwnMessage = !!session?.userId && message.sender === session.userId
+  const canEditMessage = isOwnMessage && message.type === 'm.text' && !message.content.startsWith('🔒')
   const readersUserIds = useMemo(
     () => (isOwnMessage ? getMessageReadersAtEvent(message.roomId, message.eventId, message.sender) : []),
     [isOwnMessage, message.roomId, message.eventId, message.sender, receiptsVersion],
@@ -687,7 +690,40 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
     [readersUserIds, roomMembers],
   )
   const [showProfile, setShowProfile] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editDraft, setEditDraft] = useState(message.content)
+  const [isSavingEdit, setIsSavingEdit] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
   const senderNameRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    setEditDraft(message.content)
+  }, [message.eventId, message.content])
+
+  const handleSaveEdit = useCallback(async () => {
+    const nextBody = editDraft.trim()
+    if (!nextBody || nextBody === message.content) {
+      setIsEditing(false)
+      return
+    }
+    setIsSavingEdit(true)
+    setEditError(null)
+    try {
+      await sendEditMessage(message.roomId, message.eventId, nextBody)
+      replaceMessage(message.roomId, message.eventId, {
+        ...message,
+        content: nextBody,
+        htmlContent: null,
+        isEdited: true,
+      })
+      setIsEditing(false)
+    } catch (err) {
+      console.error('[WaifuTxT] Edit message failed:', err)
+      setEditError(err instanceof Error ? err.message : "Impossible d'envoyer la modification")
+    } finally {
+      setIsSavingEdit(false)
+    }
+  }, [editDraft, message, replaceMessage])
 
   return (
     <div className={`group relative flex items-start gap-4 px-4 py-0.5 pr-12 hover:bg-bg-hover/30 transition-colors ${showHeader ? 'mt-4' : ''}`}>
@@ -702,6 +738,22 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
       )}
 
       <div className="flex-1 min-w-0">
+        {canEditMessage && !isEditing && (
+          <button
+            onClick={() => {
+              setEditError(null)
+              setIsEditing(true)
+            }}
+            className="absolute right-8 top-1.5 opacity-0 group-hover:opacity-100 text-text-muted hover:text-text-primary transition-opacity cursor-pointer"
+            title="Modifier le message"
+            aria-label="Modifier le message"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.1 2.1 0 113 2.974l-10.5 10.5-4.2 1.2 1.2-4.2 10.5-10.474z" />
+            </svg>
+          </button>
+        )}
+
         {showHeader && (
           <div className="flex items-baseline gap-2">
             <span
@@ -712,7 +764,6 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
               {message.senderName}
             </span>
             <span className="text-[11px] text-text-muted">{formatTimestamp(message.timestamp)}</span>
-            {message.isEdited && <span className="text-[10px] text-text-muted">(modifié)</span>}
           </div>
         )}
 
@@ -731,7 +782,48 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
 
         {(message.type === 'm.text' || message.type === 'm.notice' || message.type === 'm.emote') && (
           <>
-            {(message.content.startsWith('🔒') || contentWithoutUrls.length > 0) && (
+            {isEditing ? (
+              <div className="mt-1 rounded-lg border border-border bg-bg-tertiary/70 p-2.5">
+                <textarea
+                  value={editDraft}
+                  onChange={(e) => {
+                    setEditDraft(e.target.value)
+                    if (editError) setEditError(null)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSaveEdit()
+                    } else if (e.key === 'Escape') {
+                      setIsEditing(false)
+                      setEditDraft(message.content)
+                    }
+                  }}
+                  className="w-full min-h-20 resize-y text-sm"
+                  placeholder="Modifier votre message..."
+                />
+                {editError && <p className="mt-2 text-xs text-red-300">{editError}</p>}
+                <div className="mt-2 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      setIsEditing(false)
+                      setEditDraft(message.content)
+                    }}
+                    className="px-2.5 py-1 text-xs rounded-md border border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={handleSaveEdit}
+                    disabled={isSavingEdit || !editDraft.trim()}
+                    className="px-2.5 py-1 text-xs rounded-md bg-accent-pink text-white hover:bg-accent-pink-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {isSavingEdit ? 'Enregistrement...' : 'Enregistrer'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              (message.content.startsWith('🔒') || contentWithoutUrls.length > 0) && (
               <>
                 {message.type === 'm.emote' && <p className="text-sm leading-relaxed text-text-secondary italic">* {message.senderName}</p>}
                 {message.content.startsWith('🔒') ? (
@@ -750,8 +842,9 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
                   />
                 )}
               </>
+              )
             )}
-            {urls.slice(0, 3).map((linkUrl) => (
+            {!isEditing && urls.slice(0, 3).map((linkUrl) => (
               <LinkPreviewCard key={linkUrl} url={linkUrl} />
             ))}
           </>
@@ -766,6 +859,10 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
               <LinkPreviewCard key={linkUrl} url={linkUrl} />
             ))}
           </>
+        )}
+
+        {!isEditing && message.isEdited && (
+          <span className="mt-0.5 inline-block text-[10px] text-text-muted">(modifié)</span>
         )}
 
       </div>

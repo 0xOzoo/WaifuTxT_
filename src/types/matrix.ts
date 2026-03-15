@@ -39,6 +39,7 @@ export interface MessageEvent {
   htmlContent: string | null
   timestamp: number
   type: 'm.text' | 'm.image' | 'm.file' | 'm.video' | 'm.audio' | 'm.notice' | 'm.emote'
+  replacesEventId?: string | null
   replyTo: string | null
   isEdited: boolean
   imageUrl?: string
