@@ -201,7 +201,7 @@ export function MessageInput() {
         </div>
       )}
 
-      <div className="flex items-end gap-2 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent-pink transition-colors">
+      <div className="flex items-center gap-2 min-h-[44px] bg-bg-tertiary rounded-lg border border-border focus-within:border-accent-pink transition-colors">
         <button
           onClick={() => fileInputRef.current?.click()}
           className="p-3 text-text-muted hover:text-text-primary transition-colors cursor-pointer"
@@ -216,12 +216,12 @@ export function MessageInput() {
           className="hidden"
           onChange={handleFileUpload}
         />
-        <div className="relative flex-1 min-w-0">
+        <div className="relative flex-1 min-w-0 pt-[15px] pb-[9px]">
           {/* Highlight backdrop — renders behind the textarea */}
           <div
             ref={backdropRef}
             aria-hidden="true"
-            className="absolute inset-0 py-3 px-0 text-sm text-text-primary overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
+            className="absolute inset-0 pt-[15px] pb-[9px] px-0 text-sm text-text-primary overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
             dangerouslySetInnerHTML={{ __html: highlightInputText(text) }}
           />
           <textarea
@@ -233,7 +233,7 @@ export function MessageInput() {
             onScroll={syncScroll}
             placeholder={`Envoyer un message dans #${room?.name || '...'}`}
             rows={1}
-            className="relative z-10 w-full bg-transparent !border-0 resize-none py-3 px-0 text-sm outline-none max-h-40 placeholder:text-text-muted"
+            className="relative z-10 w-full bg-transparent !border-0 resize-none py-0 px-0 text-sm outline-none max-h-40 placeholder:text-text-muted"
             style={{ minHeight: '24px', color: 'transparent', caretColor: 'var(--color-text-primary)' }}
           />
         </div>
