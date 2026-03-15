@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useRoomStore } from '../../stores/roomStore'
-import { useUiStore } from '../../stores/uiStore'
 import { Avatar } from '../common/Avatar'
+import { UserProfileCard } from '../common/UserProfileCard'
 import type { RoomMember } from '../../types/matrix'
 import type { PresenceValue } from '../../stores/uiStore'
 
@@ -16,6 +16,9 @@ export function MemberPanel() {
   const members = useRoomStore((s) => (activeRoomId ? s.members.get(activeRoomId) : undefined))
   const presenceMap = useRoomStore((s) => s.presenceMap)
 
+  const [openCard, setOpenCard] = useState<RoomMember | null>(null)
+  const anchorRef = useRef<HTMLElement | null>(null)
+
   if (!members) return null
 
   const admins  = members.filter((m) => m.powerLevel >= 100)
@@ -27,6 +30,11 @@ export function MemberPanel() {
 
   const sortByPresence = (list: RoomMember[]) =>
     [...list].sort((a, b) => presenceOrder(getStatus(a)) - presenceOrder(getStatus(b)))
+
+  const handleMemberClick = (e: React.MouseEvent<HTMLDivElement>, member: RoomMember) => {
+    anchorRef.current = e.currentTarget
+    setOpenCard(member)
+  }
 
   const renderGroup = (title: string, list: RoomMember[]) => {
     if (list.length === 0) return null
@@ -47,6 +55,7 @@ export function MemberPanel() {
           return (
             <div
               key={member.userId}
+              onClick={(e) => handleMemberClick(e, member)}
               className={`flex items-center gap-2.5 px-2 py-1 rounded-md hover:bg-bg-hover/50 transition-colors cursor-pointer ${isOffline ? 'opacity-40' : ''}`}
             >
               <Avatar
@@ -75,6 +84,19 @@ export function MemberPanel() {
         {renderGroup('Modérateurs', mods)}
         {renderGroup('Membres', regular)}
       </div>
+
+      {openCard && (
+        <UserProfileCard
+          open={true}
+          anchorRef={anchorRef}
+          onClose={() => setOpenCard(null)}
+          displayName={openCard.displayName}
+          userId={openCard.userId}
+          avatarUrl={openCard.avatarUrl}
+          presence={openCard.presence}
+          powerLevel={openCard.powerLevel}
+        />
+      )}
     </div>
   )
 }
