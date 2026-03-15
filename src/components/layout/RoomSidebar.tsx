@@ -61,6 +61,12 @@ export function RoomSidebar() {
     await setOwnPresence(presence)
   }
 
+  const ownAvatarUrl = useMemo(() => {
+    if (!session?.userId) return null
+    const mxcUrl = getClient()?.getUser(session.userId)?.avatarUrl ?? null
+    return resolveAvatarUrl(mxcUrl, 32)
+  }, [session?.userId])
+
   const displayRooms = useMemo(() => {
     const allRooms = Array.from(rooms.values())
 

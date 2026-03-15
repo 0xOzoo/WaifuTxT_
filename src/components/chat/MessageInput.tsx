@@ -7,7 +7,22 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
 } from 'react'
+
+function highlightInputText(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+  return (
+    escaped.replace(
+      /@[\w._\-=+/]+/g,
+      '<mark style="display:inline-flex;align-items:center;border-radius:0.25rem;padding:1px 4px;background:var(--color-mention-bg);color:var(--color-mention)">$&</mark>',
+    ) + '\u200b'
+  )
+}
 import { useRoomStore } from '../../stores/roomStore'
+import { useUiStore } from '../../stores/uiStore'
 import { sendMessage, sendFile, sendImage, sendTyping } from '../../lib/matrix'
 
 interface PendingImage {
@@ -21,9 +36,21 @@ export function MessageInput() {
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [isSending, setIsSending] = useState(false)
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
+  const pendingMention = useUiStore((s) => s.pendingMention)
+  const setPendingMention = useUiStore((s) => s.setPendingMention)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const backdropRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingImagesRef = useRef<PendingImage[]>([])
+
+  // Inject mention from UserProfileCard / MemberPanel
+  useEffect(() => {
+    if (!pendingMention) return
+    setText((prev) => (prev ? `${prev} ${pendingMention} ` : `${pendingMention} `))
+    setPendingMention(null)
+    textareaRef.current?.focus()
+  }, [pendingMention, setPendingMention])
 
   const handleSend = useCallback(async () => {
     if (isSending || !activeRoomId) return
@@ -102,6 +129,12 @@ export function MessageInput() {
     }))
     setPendingImages((prev) => [...prev, ...addedImages])
   }
+
+  const syncScroll = useCallback(() => {
+    if (backdropRef.current && textareaRef.current) {
+      backdropRef.current.scrollTop = textareaRef.current.scrollTop
+    }
+  }, [])
 
   const removePendingImage = (id: string) => {
     setPendingImages((prev) => {
@@ -183,16 +216,27 @@ export function MessageInput() {
           className="hidden"
           onChange={handleFileUpload}
         />
-        <textarea
-          value={text}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={`Envoyer un message dans #${room?.name || '...'}`}
-          rows={1}
-          className="flex-1 bg-transparent !border-0 resize-none py-3 px-0 text-sm text-text-primary outline-none max-h-40"
-          style={{ minHeight: '24px' }}
-        />
+        <div className="relative flex-1 min-w-0">
+          {/* Highlight backdrop — renders behind the textarea */}
+          <div
+            ref={backdropRef}
+            aria-hidden="true"
+            className="absolute inset-0 py-3 px-0 text-sm text-text-primary overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
+            dangerouslySetInnerHTML={{ __html: highlightInputText(text) }}
+          />
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            onScroll={syncScroll}
+            placeholder={`Envoyer un message dans #${room?.name || '...'}`}
+            rows={1}
+            className="relative z-10 w-full bg-transparent !border-0 resize-none py-3 px-0 text-sm outline-none max-h-40 placeholder:text-text-muted"
+            style={{ minHeight: '24px', color: 'transparent', caretColor: 'var(--color-text-primary)' }}
+          />
+        </div>
         <button
           onClick={handleSend}
           disabled={isSending || (!text.trim() && pendingImages.length === 0)}

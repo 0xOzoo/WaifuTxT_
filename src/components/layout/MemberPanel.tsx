@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react'
 import { useRoomStore } from '../../stores/roomStore'
+import { useUiStore } from '../../stores/uiStore'
 import { Avatar } from '../common/Avatar'
 import type { RoomMember } from '../../types/matrix'
 import type { PresenceValue } from '../../stores/uiStore'
@@ -16,8 +18,8 @@ export function MemberPanel() {
 
   if (!members) return null
 
-  const admins = members.filter((m) => m.powerLevel >= 100)
-  const mods = members.filter((m) => m.powerLevel >= 50 && m.powerLevel < 100)
+  const admins  = members.filter((m) => m.powerLevel >= 100)
+  const mods    = members.filter((m) => m.powerLevel >= 50 && m.powerLevel < 100)
   const regular = members.filter((m) => m.powerLevel < 50)
 
   const getStatus = (m: RoomMember): PresenceValue =>
@@ -66,9 +68,7 @@ export function MemberPanel() {
   return (
     <div className="w-60 bg-bg-secondary border-l border-border flex flex-col">
       <div className="h-12 px-4 flex items-center border-b border-border shrink-0">
-        <h2 className="text-sm font-semibold text-text-primary">
-          Membres — {members.length}
-        </h2>
+        <h2 className="text-sm font-semibold text-text-primary">Membres — {members.length}</h2>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {renderGroup('Admins', admins)}
