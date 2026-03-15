@@ -17,7 +17,7 @@ function highlightInputText(text: string): string {
   return (
     escaped.replace(
       /@[\w._\-=+/]+/g,
-      '<mark style="background:var(--color-mention-bg);color:transparent;border-radius:3px;padding:1px 2px">$&</mark>',
+      '<mark style="display:inline-flex;align-items:center;border-radius:0.25rem;padding:1px 4px;background:var(--color-mention-bg);color:var(--color-mention)">$&</mark>',
     ) + '\u200b'
   )
 }
@@ -221,7 +221,7 @@ export function MessageInput() {
           <div
             ref={backdropRef}
             aria-hidden="true"
-            className="absolute inset-0 py-3 px-0 text-sm overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
+            className="absolute inset-0 py-3 px-0 text-sm text-text-primary overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
             dangerouslySetInnerHTML={{ __html: highlightInputText(text) }}
           />
           <textarea
@@ -233,8 +233,8 @@ export function MessageInput() {
             onScroll={syncScroll}
             placeholder={`Envoyer un message dans #${room?.name || '...'}`}
             rows={1}
-            className="relative z-10 w-full bg-transparent !border-0 resize-none py-3 px-0 text-sm text-text-primary outline-none max-h-40"
-            style={{ minHeight: '24px', caretColor: 'var(--color-text-primary)' }}
+            className="relative z-10 w-full bg-transparent !border-0 resize-none py-3 px-0 text-sm outline-none max-h-40 placeholder:text-text-muted"
+            style={{ minHeight: '24px', color: 'transparent', caretColor: 'var(--color-text-primary)' }}
           />
         </div>
         <button
