@@ -24,19 +24,7 @@ export function RoomSidebar() {
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
-  const [ownAvatarUrl, setOwnAvatarUrl] = useState<string | null>(null)
-  const avatarFetched = useRef(false)
-
-  // Re-run on every rooms update until we find a URL (member data arrives
-  // progressively during sync — stop as soon as we get one).
-  useEffect(() => {
-    if (avatarFetched.current) return
-    const url = getOwnAvatarUrl()
-    if (url) {
-      setOwnAvatarUrl(url)
-      avatarFetched.current = true
-    }
-  }, [rooms])
+  const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
 
   const displayRooms = useMemo(() => {
     const allRooms = Array.from(rooms.values())
@@ -108,7 +96,7 @@ export function RoomSidebar() {
                   </span>
                 )}
               </div>
-              {room.lastMessage && (
+              {showRoomMessagePreview && room.lastMessage && (
                 <p className="text-xs text-text-muted truncate">{room.lastMessage}</p>
               )}
             </div>
