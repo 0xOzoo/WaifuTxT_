@@ -50,8 +50,8 @@ export function MessageInput() {
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
   const pendingMention = useUiStore((s) => s.pendingMention)
   const setPendingMention = useUiStore((s) => s.setPendingMention)
-  const roomMembers = useRoomStore((s) => s.members.get(s.activeRoomId ?? '') ?? [])
-
+  const pendingReply = useUiStore((s) => s.pendingReply)
+  const setPendingReply = useUiStore((s) => s.setPendingReply)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
@@ -146,12 +146,15 @@ export function MessageInput() {
       }
       if (msg) {
         setText('')
-        await sendMessage(activeRoomId, msg)
+        await sendMessage(activeRoomId, msg, pendingReply?.roomId === activeRoomId ? pendingReply.eventId : undefined)
+        if (pendingReply?.roomId === activeRoomId) {
+          setPendingReply(null)
+        }
       }
     } finally {
       setIsSending(false)
     }
-  }, [activeRoomId, isSending, pendingImages, text])
+  }, [activeRoomId, isSending, pendingImages, pendingReply, setPendingReply, text])
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Autocomplete navigation takes priority
@@ -291,34 +294,38 @@ export function MessageInput() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!pendingReply || !activeRoomId) return
+    if (pendingReply.roomId !== activeRoomId) {
+      setPendingReply(null)
+    }
+  }, [activeRoomId, pendingReply, setPendingReply])
+
   if (!activeRoomId) return null
 
   const room = useRoomStore.getState().rooms.get(activeRoomId)
 
   return (
-    <div className="px-4 pb-4 relative">
-      {/* Mention autocomplete dropdown */}
-      {mentionQuery !== null && suggestions.length > 0 && (
-        <div className="absolute bottom-full left-4 right-4 mb-1 bg-bg-secondary border border-border rounded-lg overflow-hidden shadow-lg z-50">
-          {suggestions.map((member, i) => {
-            const localpart = member.userId.split(':')[0].slice(1)
-            return (
-              <button
-                key={member.userId}
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  selectSuggestion(member)
-                }}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors cursor-pointer text-left ${
-                  i === suggestionIndex ? 'bg-bg-hover' : 'hover:bg-bg-hover'
-                }`}
-              >
-                <Avatar src={member.avatarUrl} name={member.displayName} size={24} />
-                <span className="text-text-primary font-medium truncate">{member.displayName}</span>
-                <span className="text-text-muted text-xs shrink-0">@{localpart}</span>
-              </button>
-            )
-          })}
+    <div className="px-4 pb-4">
+      {pendingReply?.roomId === activeRoomId && (
+        <div className="mb-2 rounded-md border-l-2 border-accent-pink/70 bg-gradient-to-r from-accent-pink/12 to-transparent px-2 py-1.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-xs text-text-secondary">
+                <svg className="h-3.5 w-3.5 text-accent-pink/90" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a5 5 0 015 5v4m0 0l-3-3m3 3l3-3" />
+                </svg>
+                Réponse à <span className="font-medium text-accent-pink">{pendingReply.senderName}</span>
+              </p>
+              <p className="mt-0.5 text-sm text-text-primary truncate leading-snug">{pendingReply.preview || 'Message'}</p>
+            </div>
+            <button
+              onClick={() => setPendingReply(null)}
+              className="text-xs text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+            >
+              Annuler
+            </button>
+          </div>
         </div>
       )}
 
@@ -366,14 +373,19 @@ export function MessageInput() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
           </svg>
         </button>
-        <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleFileUpload}
+        />
         <div className="relative flex-1 min-w-0 pt-[15px] pb-[9px]">
           {/* Highlight backdrop — renders behind the textarea */}
           <div
             ref={backdropRef}
             aria-hidden="true"
             className="absolute inset-0 pt-[15px] pb-[9px] px-0 text-sm text-text-primary overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
-            dangerouslySetInnerHTML={{ __html: highlightInputText(text, validLocalparts) }}
+            dangerouslySetInnerHTML={{ __html: highlightInputText(text) }}
           />
           <textarea
             ref={textareaRef}
