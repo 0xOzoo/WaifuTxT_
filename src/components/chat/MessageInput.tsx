@@ -48,10 +48,15 @@ export function MessageInput() {
   const [suggestionIndex, setSuggestionIndex] = useState(0)
 
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
+  const membersMap = useRoomStore((s) => s.members)
   const pendingMention = useUiStore((s) => s.pendingMention)
   const setPendingMention = useUiStore((s) => s.setPendingMention)
   const pendingReply = useUiStore((s) => s.pendingReply)
   const setPendingReply = useUiStore((s) => s.setPendingReply)
+  const roomMembers = useMemo<RoomMember[]>(
+    () => (activeRoomId ? membersMap.get(activeRoomId) || [] : []),
+    [activeRoomId, membersMap],
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
@@ -385,7 +390,7 @@ export function MessageInput() {
             ref={backdropRef}
             aria-hidden="true"
             className="absolute inset-0 pt-[15px] pb-[9px] px-0 text-sm text-text-primary overflow-hidden pointer-events-none whitespace-pre-wrap break-words"
-            dangerouslySetInnerHTML={{ __html: highlightInputText(text) }}
+            dangerouslySetInnerHTML={{ __html: highlightInputText(text, validLocalparts) }}
           />
           <textarea
             ref={textareaRef}

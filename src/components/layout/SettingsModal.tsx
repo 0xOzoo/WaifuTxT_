@@ -8,6 +8,7 @@ import type { DeviceInfo } from '../../lib/matrix'
 import { startSelfVerification } from '../../lib/verification'
 import { AccentColorPicker } from '../settings/AccentColorPicker'
 import { ThemePicker } from '../settings/ThemePicker'
+import { WAIFU_OPTIONS, getWaifuById } from '../../lib/waifu'
 
 const SETTINGS_SECTIONS = [
   { id: 'profile', label: 'Profil' },
@@ -381,6 +382,12 @@ export function SettingsModal() {
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
   const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
   const setRoomMessagePreview = useUiStore((s) => s.setRoomMessagePreview)
+  const waifuOptIn = useUiStore((s) => s.waifuOptIn)
+  const selectedWaifuId = useUiStore((s) => s.selectedWaifuId)
+  const setWaifuOptIn = useUiStore((s) => s.setWaifuOptIn)
+  const setSelectedWaifuId = useUiStore((s) => s.setSelectedWaifuId)
+  const typingIndicatorStyle = useUiStore((s) => s.typingIndicatorStyle)
+  const setTypingIndicatorStyle = useUiStore((s) => s.setTypingIndicatorStyle)
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('profile')
   const [ownAvatarUrl, setOwnAvatarUrl] = useState<string | null>(null)
   const avatarFetched = useRef(false)
@@ -399,6 +406,10 @@ export function SettingsModal() {
     () => session?.userId?.split(':')[0]?.replace('@', '') || 'Utilisateur',
     [session?.userId],
   )
+  const displayedOwnAvatarUrl = useMemo(() => {
+    if (waifuOptIn) return getWaifuById(selectedWaifuId).imageUrl
+    return ownAvatarUrl
+  }, [ownAvatarUrl, selectedWaifuId, waifuOptIn])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -452,7 +463,7 @@ export function SettingsModal() {
           {activeSection === 'profile' && (
             <div className="mt-6 space-y-4">
               <div className="p-4 rounded-lg border border-border bg-bg-primary/40 flex items-center gap-4">
-                <Avatar src={ownAvatarUrl} name={session?.userId || '?'} size={56} status="online" />
+                <Avatar src={displayedOwnAvatarUrl} name={session?.userId || '?'} size={56} status="online" />
                 <div className="min-w-0">
                   <p className="text-lg font-semibold text-text-primary truncate">{username}</p>
                   <p className="text-sm text-text-muted truncate">{session?.userId || 'Non connecté'}</p>
@@ -509,6 +520,87 @@ export function SettingsModal() {
                   Personnalise la couleur principale utilisée dans les boutons, badges et éléments actifs.
                 </p>
                 <AccentColorPicker />
+              </div>
+
+              {/* Waifu personalization */}
+              <div className="p-4 rounded-lg border border-border bg-bg-primary/40 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-text-primary">Personnalisation waifu (opt-in)</p>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Remplace localement votre avatar par une waifu dans l'interface WaifuTxT_.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={waifuOptIn}
+                    onClick={() => setWaifuOptIn(!waifuOptIn)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                      waifuOptIn ? 'bg-accent-pink' : 'bg-bg-hover'
+                    }`}
+                    title="Activer ou désactiver la personnalisation waifu"
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        waifuOptIn ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {WAIFU_OPTIONS.map((waifu) => {
+                    const selected = selectedWaifuId === waifu.id
+                    return (
+                      <button
+                        key={waifu.id}
+                        onClick={() => setSelectedWaifuId(waifu.id)}
+                        disabled={!waifuOptIn}
+                        className={`text-left rounded-lg border transition-colors overflow-hidden ${
+                          selected
+                            ? 'border-accent-pink bg-accent-pink/10'
+                            : 'border-border bg-bg-tertiary/40 hover:border-accent-pink/40'
+                        } ${waifuOptIn ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                      >
+                        <img src={waifu.imageUrl} alt={waifu.name} className="w-full h-28 object-cover" />
+                        <div className="p-2.5">
+                          <p className="text-sm font-semibold text-text-primary">{waifu.name}</p>
+                          <p className="text-xs text-text-secondary mt-0.5">{waifu.tagline}</p>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="pt-1">
+                  <p className="text-sm font-medium text-text-primary mb-1">Indicateur "est en train d'écrire"</p>
+                  <p className="text-xs text-text-secondary mb-3">
+                    Choisissez d'afficher la waifu ou les trois points animés.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setTypingIndicatorStyle('waifu')}
+                      className={`px-3 py-1.5 rounded-md text-xs border transition-colors cursor-pointer ${
+                        typingIndicatorStyle === 'waifu'
+                          ? 'border-accent-pink bg-accent-pink/10 text-accent-pink'
+                          : 'border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                      }`}
+                    >
+                      Waifu
+                    </button>
+                    <button
+                      onClick={() => setTypingIndicatorStyle('dots')}
+                      className={`px-3 py-1.5 rounded-md text-xs border transition-colors cursor-pointer ${
+                        typingIndicatorStyle === 'dots'
+                          ? 'border-accent-pink bg-accent-pink/10 text-accent-pink'
+                          : 'border-border text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                      }`}
+                    >
+                      3 points
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}

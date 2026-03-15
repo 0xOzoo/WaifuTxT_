@@ -4,6 +4,7 @@ import { Avatar } from '../common/Avatar'
 import { useAuthStore } from '../../stores/authStore'
 import { useUiStore } from '../../stores/uiStore'
 import { getOwnAvatarUrl, setOwnPresence } from '../../lib/matrix'
+import { getWaifuById } from '../../lib/waifu'
 import type { PresenceValue } from '../../stores/uiStore'
 
 const PRESENCE_OPTIONS: { value: PresenceValue; label: string; color: string }[] = [
@@ -39,6 +40,8 @@ export function RoomSidebar() {
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
   const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
+  const waifuOptIn = useUiStore((s) => s.waifuOptIn)
+  const selectedWaifuId = useUiStore((s) => s.selectedWaifuId)
   const myUserId = session?.userId ?? null
 
   const [ownAvatarUrl, setOwnAvatarUrl] = useState<string | null>(null)
@@ -46,6 +49,11 @@ export function RoomSidebar() {
     const url = getOwnAvatarUrl()
     if (url) setOwnAvatarUrl(url)
   }, [rooms])
+
+  const displayedOwnAvatarUrl = useMemo(() => {
+    if (waifuOptIn) return getWaifuById(selectedWaifuId).imageUrl
+    return ownAvatarUrl
+  }, [ownAvatarUrl, selectedWaifuId, waifuOptIn])
 
   // Close presence menu on outside click
   useEffect(() => {
@@ -178,7 +186,7 @@ export function RoomSidebar() {
           title="Changer de statut"
           aria-label="Changer de statut"
         >
-          <Avatar src={ownAvatarUrl} name={session?.userId || '?'} size={32} status={ownPresence} />
+          <Avatar src={displayedOwnAvatarUrl} name={session?.userId || '?'} size={32} status={ownPresence} />
           <div className="min-w-0 text-left">
             <div className="text-sm font-semibold truncate text-text-primary leading-tight">
               {session?.userId?.split(':')[0]?.replace('@', '') || ''}
