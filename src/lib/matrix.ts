@@ -161,6 +161,15 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
         event.once(matrixSdk.MatrixEventEvent.Decrypted, () => {
           const msg = eventToMessage(event, room.roomId)
           if (!msg) return
+          if (msg.replacesEventId) {
+            applyMessageEdit(room.roomId, msg)
+            // This encrypted event is only the edit payload; remove its temporary placeholder.
+            const decryptedEventId = event.getId()
+            if (decryptedEventId) {
+              useMessageStore.getState().removeMessage(room.roomId, decryptedEventId)
+            }
+            return
+          }
           const store = useMessageStore.getState()
           // replaceMessage also appends when the event is not yet in the list.
           store.replaceMessage(room.roomId, msg.eventId, msg)
@@ -171,6 +180,10 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
 
       const msg = eventToMessage(event, room.roomId)
       if (msg) {
+        if (msg.replacesEventId) {
+          applyMessageEdit(room.roomId, msg)
+          return
+        }
         useMessageStore.getState().addMessage(room.roomId, msg)
         updateRoomLastMessage(room.roomId, msg)
       }
@@ -321,6 +334,24 @@ function updateRoomLastMessage(roomId: string, msg: MessageEvent) {
   })
 }
 
+function applyMessageEdit(roomId: string, editMessage: MessageEvent): boolean {
+  const targetEventId = editMessage.replacesEventId
+  if (!targetEventId) return false
+  const store = useMessageStore.getState()
+  const existing = store.getMessages(roomId).find((m) => m.eventId === targetEventId)
+  if (!existing) return false
+
+  const updated: MessageEvent = {
+    ...existing,
+    content: editMessage.content,
+    htmlContent: editMessage.htmlContent,
+    isEdited: true,
+  }
+  store.replaceMessage(roomId, targetEventId, updated)
+  updateRoomLastMessage(roomId, updated)
+  return true
+}
+
 function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null {
   // Check encrypted states BEFORE inspecting content:
   // • type still 'm.room.encrypted' → decryption pending or not yet attempted
@@ -330,16 +361,33 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
   if (event.getType() === 'm.room.encrypted') return encryptedFallbackMessage(event, roomId)
   if (event.isEncrypted?.() && event.isDecryptionFailure?.()) return encryptedFallbackMessage(event, roomId)
 
-  const content = event.getContent()
-  if (content.msgtype === 'm.bad.encrypted' || content.body?.includes?.('Unable to decrypt')) return encryptedFallbackMessage(event, roomId)
-  if (!content.body && !content.msgtype) return null
+  const content = event.getContent() as Record<string, unknown>
+  const wireContent = (event.getWireContent?.() as Record<string, unknown> | undefined) || {}
+  type RelationContent = { rel_type?: string; event_id?: string; 'm.in_reply_to'?: { event_id?: string } }
+  const relation = (event.getRelation?.() as RelationContent | null) || null
+  const mRelatesTo =
+    relation ||
+    ((wireContent['m.relates_to'] as RelationContent | undefined) ?? (content['m.relates_to'] as RelationContent | undefined))
+  const replacesEventId =
+    mRelatesTo?.rel_type === 'm.replace' && typeof mRelatesTo?.event_id === 'string'
+      ? mRelatesTo.event_id
+      : null
+  const effectiveContent =
+    ((wireContent['m.new_content'] as Record<string, unknown> | undefined) ||
+      (content['m.new_content'] as Record<string, unknown> | undefined) ||
+      content) as Record<string, unknown>
+  if (
+    (content as Record<string, unknown>).msgtype === 'm.bad.encrypted' ||
+    String((content as Record<string, unknown>).body || '').includes('Unable to decrypt')
+  ) return encryptedFallbackMessage(event, roomId)
+  if (!effectiveContent.body && !effectiveContent.msgtype) return null
 
   const sender = event.getSender()
   if (!sender) return null
   const room = client?.getRoom(roomId)
   const member = room?.getMember(sender)
 
-  const msgtype = content.msgtype || 'm.text'
+  const msgtype = String(effectiveContent.msgtype || content.msgtype || 'm.text')
   let type: MessageEvent['type'] = 'm.text'
   if (msgtype === 'm.image') type = 'm.image'
   else if (msgtype === 'm.file') type = 'm.file'
@@ -348,7 +396,7 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
   else if (msgtype === 'm.notice') type = 'm.notice'
   else if (msgtype === 'm.emote') type = 'm.emote'
 
-  const replyTo = content['m.relates_to']?.['m.in_reply_to']?.event_id || null
+  const replyTo = (mRelatesTo?.['m.in_reply_to']?.event_id as string | undefined) || null
 
   let imageUrl: string | undefined
   let imageInfo: MessageEvent['imageInfo']
@@ -360,29 +408,33 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
   let fileSize: number | undefined
 
   if (type === 'm.image') {
-    imageInfo = content.info
-    if (content.file) {
-      encryptedFile = content.file as EncryptedFileInfo
-      if (content.info?.thumbnail_file) encryptedThumbnailFile = content.info.thumbnail_file as EncryptedFileInfo
-    } else if (content.url) {
+    imageInfo = effectiveContent.info as MessageEvent['imageInfo']
+    if (effectiveContent.file) {
+      encryptedFile = effectiveContent.file as EncryptedFileInfo
+      if ((effectiveContent.info as Record<string, unknown> | undefined)?.thumbnail_file) {
+        encryptedThumbnailFile = (effectiveContent.info as Record<string, unknown>).thumbnail_file as EncryptedFileInfo
+      }
+    } else if (effectiveContent.url) {
       // Prefer direct media download over thumbnail endpoints for better compatibility.
       // Some homeservers/proxies fail thumbnail generation or auth on thumbnails.
-      imageUrl = client?.mxcUrlToHttp(content.url, undefined, undefined, undefined, false, true, true) || undefined
-      if (content.info?.thumbnail_url) {
-        thumbnailUrl = client?.mxcUrlToHttp(content.info.thumbnail_url, 400, 300, 'scale', false, true, true) || undefined
+      imageUrl = client?.mxcUrlToHttp(String(effectiveContent.url), undefined, undefined, undefined, false, true, true) || undefined
+      const info = effectiveContent.info as Record<string, unknown> | undefined
+      if (typeof info?.thumbnail_url === 'string') {
+        thumbnailUrl = client?.mxcUrlToHttp(info.thumbnail_url, 400, 300, 'scale', false, true, true) || undefined
       }
     }
   }
 
   if (type === 'm.file' || type === 'm.video' || type === 'm.audio') {
-    fileName = content.filename || content.body
-    fileSize = content.info?.size
-    if (content.file) encryptedFile = content.file as EncryptedFileInfo
-    else if (content.url) fileUrl = client?.mxcUrlToHttp(content.url, undefined, undefined, undefined, false, true) || undefined
+    fileName = String(effectiveContent.filename || effectiveContent.body || '')
+    const info = effectiveContent.info as Record<string, unknown> | undefined
+    fileSize = typeof info?.size === 'number' ? info.size : undefined
+    if (effectiveContent.file) encryptedFile = effectiveContent.file as EncryptedFileInfo
+    else if (effectiveContent.url) fileUrl = client?.mxcUrlToHttp(String(effectiveContent.url), undefined, undefined, undefined, false, true) || undefined
     if (type === 'm.video') {
-      if (content.info?.thumbnail_file) encryptedThumbnailFile = content.info.thumbnail_file as EncryptedFileInfo
-      if (content.info?.thumbnail_url) {
-        thumbnailUrl = client?.mxcUrlToHttp(content.info.thumbnail_url, 400, 300, 'scale', false, true) || undefined
+      if (info?.thumbnail_file) encryptedThumbnailFile = info.thumbnail_file as EncryptedFileInfo
+      if (typeof info?.thumbnail_url === 'string') {
+        thumbnailUrl = client?.mxcUrlToHttp(info.thumbnail_url, 400, 300, 'scale', false, true) || undefined
       }
     }
   }
@@ -400,12 +452,13 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
     sender,
     senderName: member?.name || sender,
     senderAvatar,
-    content: content.body || '',
-    htmlContent: content.formatted_body || null,
+    content: String(effectiveContent.body || ''),
+    htmlContent: (effectiveContent.formatted_body as string | undefined) || null,
     timestamp: event.getTs(),
     type,
+    replacesEventId,
     replyTo,
-    isEdited: !!content['m.new_content'],
+    isEdited: !!content['m.new_content'] || !!replacesEventId,
     imageUrl,
     imageInfo,
     thumbnailUrl,
@@ -420,6 +473,69 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
 export async function sendMessage(roomId: string, body: string): Promise<void> {
   if (!client) return
   await client.sendMessage(roomId, { msgtype: 'm.text', body } as any)
+}
+
+export async function sendEditMessage(roomId: string, eventId: string, body: string): Promise<void> {
+  if (!client) throw new Error('Client Matrix non initialisé')
+  const nextBody = body.trim()
+  if (!nextBody) throw new Error('Le message édité est vide')
+  if (!eventId || !eventId.startsWith('$')) {
+    throw new Error("Ce message n'est pas encore synchronisé avec le serveur")
+  }
+
+  const editContent = {
+    msgtype: 'm.text',
+    body: `* ${nextBody}`,
+    'm.new_content': {
+      msgtype: 'm.text',
+      body: nextBody,
+    },
+    'm.relates_to': {
+      rel_type: 'm.replace',
+      event_id: eventId,
+    },
+  } as any
+
+  try {
+    await (client as any).sendEvent(roomId, 'm.room.message', editContent)
+  } catch {
+    // Some homeservers/SDK paths behave better with sendMessage; keep a fallback.
+    await client.sendMessage(roomId, editContent)
+  }
+}
+
+export async function getOrCreateDmRoom(userId: string): Promise<string> {
+  if (!client) throw new Error('Client non initialisé')
+  const myUserId = client.getUserId()
+  if (!myUserId) throw new Error('Utilisateur non identifié')
+
+  const directMap =
+    (((client as unknown as { getAccountData: (key: string) => { getContent: () => unknown } | null })
+      .getAccountData('m.direct')
+      ?.getContent() as Record<string, string[]>) || {})
+
+  const knownDirectRooms = directMap[userId] || []
+  for (const roomId of knownDirectRooms) {
+    const room = client.getRoom(roomId)
+    if (room && room.getMyMembership() === 'join') return roomId
+  }
+
+  // Fallback: detect an existing 1:1 room with this user.
+  const existing = client.getRooms().find((room) => {
+    if (room.getMyMembership() !== 'join') return false
+    if (room.isSpaceRoom?.()) return false
+    const members = room.getJoinedMembers().map((m) => m.userId)
+    return members.includes(userId) && members.includes(myUserId) && members.length <= 2
+  })
+  if (existing) return existing.roomId
+
+  // Create a fresh DM room.
+  const created = await client.createRoom({
+    is_direct: true,
+    invite: [userId],
+    preset: 'trusted_private_chat',
+  } as any)
+  return created.room_id
 }
 
 export async function sendImage(roomId: string, file: File): Promise<void> {
@@ -455,12 +571,45 @@ export async function loadRoomHistory(roomId: string): Promise<boolean> {
     const before = timeline.getEvents().length
     await client.scrollback(room, 30)
     const events = timeline.getEvents()
-    const messages: MessageEvent[] = []
+    const orderedIds: string[] = []
+    const byId = new Map<string, MessageEvent>()
+    const pendingEdits = new Map<string, MessageEvent>()
     for (const event of events) {
       if (event.getType() !== 'm.room.message' && event.getType() !== 'm.room.encrypted') continue
       const msg = eventToMessage(event, roomId)
-      if (msg) messages.push(msg)
+      if (!msg) continue
+      if (msg.replacesEventId) {
+        const existing = byId.get(msg.replacesEventId)
+        if (existing) {
+          byId.set(msg.replacesEventId, {
+            ...existing,
+            content: msg.content,
+            htmlContent: msg.htmlContent,
+            isEdited: true,
+          })
+        } else {
+          const prevPending = pendingEdits.get(msg.replacesEventId)
+          if (!prevPending || msg.timestamp >= prevPending.timestamp) {
+            pendingEdits.set(msg.replacesEventId, msg)
+          }
+        }
+        continue
+      }
+      if (!byId.has(msg.eventId)) orderedIds.push(msg.eventId)
+      const pending = pendingEdits.get(msg.eventId)
+      byId.set(
+        msg.eventId,
+        pending
+          ? {
+              ...msg,
+              content: pending.content,
+              htmlContent: pending.htmlContent,
+              isEdited: true,
+            }
+          : msg,
+      )
     }
+    const messages = orderedIds.map((id) => byId.get(id)).filter((m): m is MessageEvent => !!m)
     useMessageStore.getState().setMessages(roomId, messages)
     return events.length > before
   } finally {
@@ -474,22 +623,65 @@ export async function loadInitialMessages(roomId: string): Promise<void> {
   const room = client.getRoom(roomId)
   if (!room) return
   const events = room.getLiveTimeline().getEvents()
-  const messages: MessageEvent[] = []
+  const orderedIds: string[] = []
+  const byId = new Map<string, MessageEvent>()
+  const pendingEdits = new Map<string, MessageEvent>()
   for (const event of events) {
     if (event.getType() !== 'm.room.message' && event.getType() !== 'm.room.encrypted') continue
     const msg = eventToMessage(event, roomId)
-    if (msg) messages.push(msg)
+    if (msg) {
+      if (msg.replacesEventId) {
+        const existing = byId.get(msg.replacesEventId)
+        if (existing) {
+          byId.set(msg.replacesEventId, {
+            ...existing,
+            content: msg.content,
+            htmlContent: msg.htmlContent,
+            isEdited: true,
+          })
+        } else {
+          const prevPending = pendingEdits.get(msg.replacesEventId)
+          if (!prevPending || msg.timestamp >= prevPending.timestamp) {
+            pendingEdits.set(msg.replacesEventId, msg)
+          }
+        }
+      } else {
+        if (!byId.has(msg.eventId)) orderedIds.push(msg.eventId)
+        const pending = pendingEdits.get(msg.eventId)
+        byId.set(
+          msg.eventId,
+          pending
+            ? {
+                ...msg,
+                content: pending.content,
+                htmlContent: pending.htmlContent,
+                isEdited: true,
+              }
+            : msg,
+        )
+      }
+    }
     // Attach a decryption listener on history events so they update when keys
     // become available (e.g. after session verification or key backup restore).
     if (event.getType() === 'm.room.encrypted') {
       event.once(matrixSdk.MatrixEventEvent.Decrypted, () => {
         const decrypted = eventToMessage(event, roomId)
         if (!decrypted) return
+        if (decrypted.replacesEventId) {
+          applyMessageEdit(roomId, decrypted)
+          // Drop the fallback notice created before decryption for encrypted edit events.
+          const decryptedEventId = event.getId()
+          if (decryptedEventId) {
+            useMessageStore.getState().removeMessage(roomId, decryptedEventId)
+          }
+          return
+        }
         useMessageStore.getState().replaceMessage(roomId, decrypted.eventId, decrypted)
         updateRoomLastMessage(roomId, decrypted)
       })
     }
   }
+  const messages = orderedIds.map((id) => byId.get(id)).filter((m): m is MessageEvent => !!m)
   useMessageStore.getState().setMessages(roomId, messages)
 }
 
