@@ -6,6 +6,8 @@ import { Avatar } from '../common/Avatar'
 import { getSessions, getOwnAvatarUrl, isSessionVerified, logout, renameSession, deleteSession } from '../../lib/matrix'
 import type { DeviceInfo } from '../../lib/matrix'
 import { startSelfVerification } from '../../lib/verification'
+import { AccentColorPicker } from '../settings/AccentColorPicker'
+import { ThemePicker } from '../settings/ThemePicker'
 
 const SETTINGS_SECTIONS = [
   { id: 'profile', label: 'Profil' },
@@ -465,6 +467,7 @@ export function SettingsModal() {
 
           {activeSection === 'appearance' && (
             <div className="mt-6 space-y-3">
+              {/* Message preview toggle */}
               <div className="p-4 rounded-lg border border-border bg-bg-primary/40 flex items-center justify-between gap-4">
                 <div>
                   <p className="text-sm font-medium text-text-primary">Aperçu des messages des salons</p>
@@ -489,8 +492,23 @@ export function SettingsModal() {
                   />
                 </button>
               </div>
-              <div className="p-4 rounded-lg border border-border bg-bg-primary/40 text-sm text-text-secondary">
-                Les options d'apparence avancées seront ajoutées ici (thèmes, couleurs, CSS custom, etc.).
+
+              {/* Theme picker */}
+              <div className="p-4 rounded-lg border border-border bg-bg-primary/40">
+                <p className="text-sm font-medium text-text-primary mb-1">Thème</p>
+                <p className="text-xs text-text-secondary mb-4">
+                  Change l'apparence globale de l'interface. S'applique immédiatement.
+                </p>
+                <ThemePicker />
+              </div>
+
+              {/* Accent color picker */}
+              <div className="p-4 rounded-lg border border-border bg-bg-primary/40">
+                <p className="text-sm font-medium text-text-primary mb-1">Couleur d'accent</p>
+                <p className="text-xs text-text-secondary mb-4">
+                  Personnalise la couleur principale utilisée dans les boutons, badges et éléments actifs.
+                </p>
+                <AccentColorPicker />
               </div>
             </div>
           )}

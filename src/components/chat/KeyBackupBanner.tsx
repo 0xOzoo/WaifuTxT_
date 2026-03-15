@@ -5,6 +5,47 @@ import { useVerificationStore } from '../../stores/verificationStore'
 
 type Mode = 'choice' | 'key-input'
 
+// ---------------------------------------------------------------------------
+// Success modal shown after a successful key backup restore
+// ---------------------------------------------------------------------------
+
+function KeyRestoreSuccessModal({ onClose, message }: { onClose: () => void; message: string }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 4000)
+    return () => clearTimeout(t)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <button className="absolute inset-0 bg-black/65 backdrop-blur-[2px]" aria-label="Fermer" onClick={onClose} />
+      <div className="relative w-[400px] max-w-[92vw] rounded-xl border border-border bg-bg-secondary shadow-2xl p-6">
+        <div className="flex flex-col items-center gap-5 text-center">
+          <div className="w-16 h-16 rounded-full bg-success/15 flex items-center justify-center">
+            <svg className="w-8 h-8 text-success" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.955 11.955 0 003 10c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.572-.598-3.75h-.152c-3.196 0-6.1-1.249-8.25-3.286z" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-success">Messages déchiffrés !</h3>
+            <p className="text-sm text-text-secondary mt-1">
+              Votre historique chiffré est maintenant accessible.
+            </p>
+            {message && (
+              <p className="text-xs text-text-muted mt-2 bg-bg-primary/60 rounded-md px-3 py-2">{message}</p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="w-full py-2 rounded-md text-sm font-medium bg-accent-pink text-white hover:bg-accent-pink-hover transition-colors cursor-pointer"
+          >
+            Continuer
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function KeyBackupBanner() {
   const [mode, setMode] = useState<Mode>('choice')
   const [recoveryKey, setRecoveryKey] = useState('')
@@ -46,8 +87,7 @@ export function KeyBackupBanner() {
     try {
       const result = await restoreKeyBackup(recoveryKey)
       setKeyStatus('success')
-      setKeyMessage(`${result.imported} / ${result.total} clés restaurées !`)
-      setTimeout(() => handleDismiss(), 3000)
+      setKeyMessage(`${result.imported} / ${result.total} clés restaurées`)
     } catch (err) {
       setKeyStatus('error')
       setKeyMessage(err instanceof Error ? err.message : String(err))
@@ -61,7 +101,10 @@ export function KeyBackupBanner() {
   }
 
   if (isRelevant === null) return null
-  if (!isRelevant || dismissed || keyStatus === 'success') return null
+
+  if (keyStatus === 'success') return <KeyRestoreSuccessModal onClose={handleDismiss} message={keyMessage} />
+
+  if (!isRelevant || dismissed) return null
 
   const isVerifying =
     verificationPhase === 'ready' || verificationPhase === 'sas' || verificationPhase === 'incoming'

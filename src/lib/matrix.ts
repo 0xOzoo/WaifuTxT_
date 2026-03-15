@@ -520,7 +520,15 @@ export function loadRoomMembers(roomId: string): void {
       presence,
     }
   })
-  useRoomStore.getState().setMembers(roomId, members)
+  const store = useRoomStore.getState()
+  // Seed presenceMap for members not yet tracked by real-time events,
+  // so the member list shows correct status without waiting for a presence event.
+  for (const m of members) {
+    if (!(m.userId in store.presenceMap)) {
+      store.updatePresence(m.userId, m.presence)
+    }
+  }
+  store.setMembers(roomId, members)
 }
 
 export function sendTyping(roomId: string, typing: boolean): void {
@@ -639,8 +647,9 @@ export async function setOwnPresence(presence: 'online' | 'unavailable' | 'offli
 }
 
 export async function initOwnPresence(): Promise<void> {
-  const { useUiStore } = await import('../stores/uiStore')
-  const presence = useUiStore.getState().ownPresence
+  const stored = localStorage.getItem('waifutxt_presence')
+  const presence: 'online' | 'unavailable' | 'offline' =
+    stored === 'online' || stored === 'unavailable' || stored === 'offline' ? stored : 'online'
   // Optimistically push into presenceMap so the UI reflects it immediately,
   // before the server echoes the User.presence event back.
   const userId = client?.getUserId()
