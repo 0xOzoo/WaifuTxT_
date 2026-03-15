@@ -1,16 +1,86 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuthStore } from '../../stores/authStore'
 import { useUiStore } from '../../stores/uiStore'
 import { Avatar } from '../common/Avatar'
+import { isSessionVerified } from '../../lib/matrix'
+import { startSelfVerification } from '../../lib/verification'
 
 const SETTINGS_SECTIONS = [
   { id: 'profile', label: 'Profil' },
+  { id: 'security', label: 'Sécurité' },
   { id: 'appearance', label: 'Apparence' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'account', label: 'Compte' },
 ] as const
 
 type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]['id']
+
+function SecuritySection({ onClose }: { onClose: () => void }) {
+  const [isStarting, setIsStarting] = useState(false)
+  const [verified, setVerified] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    isSessionVerified().then(setVerified).catch(() => setVerified(false))
+  }, [])
+
+  const handleVerify = async () => {
+    setIsStarting(true)
+    try {
+      await startSelfVerification()
+      onClose()
+    } finally {
+      setIsStarting(false)
+    }
+  }
+
+  return (
+    <div className="mt-6 space-y-4">
+      <div className="p-4 rounded-lg border border-border bg-bg-primary/40 space-y-3">
+        <div className="flex items-start gap-3">
+          <div className={`mt-0.5 w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${verified ? 'bg-success/15' : 'bg-accent-pink/15'}`}>
+            <svg className={`w-4 h-4 ${verified ? 'text-success' : 'text-accent-pink'}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.955 11.955 0 003 10c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.572-.598-3.75h-.152c-3.196 0-6.1-1.249-8.25-3.286z" />
+            </svg>
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-text-primary">Vérifier cette session</p>
+            {verified ? (
+              <p className="text-xs text-success mt-0.5">Cette session est vérifiée.</p>
+            ) : (
+              <p className="text-xs text-text-secondary mt-0.5">
+                Confirmez l'identité de ce client en le vérifiant depuis votre téléphone,
+                un autre navigateur ou un client Matrix (Element, Cinny, Comet…).
+                Cela permet de marquer vos messages E2EE comme fiables.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {!verified && (
+          <button
+            onClick={handleVerify}
+            disabled={isStarting}
+            className="w-full py-2 rounded-md text-sm font-medium bg-accent-pink text-white hover:bg-accent-pink-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          >
+            {isStarting ? 'Envoi de la demande…' : 'Vérifier avec un autre appareil'}
+          </button>
+        )}
+      </div>
+
+      {!verified && (
+        <div className="p-4 rounded-lg border border-border bg-bg-primary/40 space-y-2">
+          <p className="text-xs font-medium text-text-secondary uppercase tracking-wide">Comment ça marche</p>
+          <ol className="text-sm text-text-secondary space-y-1.5 list-decimal list-inside">
+            <li>Cliquez sur le bouton ci-dessus pour envoyer une demande</li>
+            <li>Acceptez la demande sur votre autre appareil ou client</li>
+            <li>Comparez les 7 emojis affichés des deux côtés</li>
+            <li>Confirmez s'ils sont identiques — la session est vérifiée</li>
+          </ol>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function SettingsModal() {
   const session = useAuthStore((s) => s.session)
@@ -83,6 +153,10 @@ export function SettingsModal() {
                 </div>
               </div>
             </div>
+          )}
+
+          {activeSection === 'security' && (
+            <SecuritySection onClose={() => setSettingsModal(false)} />
           )}
 
           {activeSection === 'appearance' && (
