@@ -298,6 +298,7 @@ function syncRooms() {
       lastMessage: lastMessageText,
       lastMessageTs: lastEvent?.getTs() || 0,
       unreadCount: room.getUnreadNotificationCount() || 0,
+      mentionCount: room.getUnreadNotificationCount('highlight') || 0,
       isSpace,
       isDirect,
       membership: room.getMyMembership(),
