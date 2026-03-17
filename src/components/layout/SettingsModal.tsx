@@ -689,7 +689,7 @@ export function SettingsModal() {
                 <ShortcutRow keys={['Ctrl', 'K']} label="Rechercher un salon" />
                 <ShortcutRow keys={['Ctrl', ',']} label="Ouvrir / fermer les paramètres" />
                 <ShortcutRow keys={['Ctrl', 'Shift', 'M']} label="Afficher / masquer les membres" />
-                <ShortcutRow keys={['Échap']} label="Fermer un panneau ouvert" />
+                <ShortcutRow keys={['Échap']} label="Fermer les paramètres" />
               </div>
               <div className="p-4 rounded-lg border border-border bg-bg-primary/40 space-y-3">
                 <h3 className="text-sm font-medium text-text-primary">Messages</h3>
