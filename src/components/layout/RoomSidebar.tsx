@@ -40,6 +40,7 @@ export function RoomSidebar() {
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
   const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
+  const showUnreadBadges = useUiStore((s) => s.showUnreadBadges)
   const waifuOptIn = useUiStore((s) => s.waifuOptIn)
   const selectedWaifuId = useUiStore((s) => s.selectedWaifuId)
   const myUserId = session?.userId ?? null
@@ -141,11 +142,11 @@ export function RoomSidebar() {
                 <span className={`text-sm truncate ${room.unreadCount > 0 && activeRoomId !== room.roomId ? 'font-semibold' : 'font-medium'}`}>
                   {room.name}
                 </span>
-                {activeRoomId !== room.roomId && room.mentionCount > 0 ? (
+                {showUnreadBadges && activeRoomId !== room.roomId && room.mentionCount > 0 ? (
                   <span className="shrink-0 flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-accent-pink">
                     {room.mentionCount > 99 ? '99+' : room.mentionCount}
                   </span>
-                ) : activeRoomId !== room.roomId && room.unreadCount > 0 ? (
+                ) : showUnreadBadges && activeRoomId !== room.roomId && room.unreadCount > 0 ? (
                   <span className="shrink-0 w-2 h-2 rounded-full bg-accent-pink" />
                 ) : null}
               </div>

@@ -382,6 +382,8 @@ export function SettingsModal() {
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
   const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
   const setRoomMessagePreview = useUiStore((s) => s.setRoomMessagePreview)
+  const showUnreadBadges = useUiStore((s) => s.showUnreadBadges)
+  const setShowUnreadBadges = useUiStore((s) => s.setShowUnreadBadges)
   const waifuOptIn = useUiStore((s) => s.waifuOptIn)
   const selectedWaifuId = useUiStore((s) => s.selectedWaifuId)
   const setWaifuOptIn = useUiStore((s) => s.setWaifuOptIn)
@@ -606,8 +608,31 @@ export function SettingsModal() {
           )}
 
           {activeSection === 'notifications' && (
-            <div className="mt-6 p-4 rounded-lg border border-border bg-bg-primary/40 text-sm text-text-secondary">
-              Les préférences de notifications seront ajoutées ici.
+            <div className="mt-6 space-y-3">
+              <div className="p-4 rounded-lg border border-border bg-bg-primary/40 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-text-primary">Badges non-lus et mentions</p>
+                  <p className="text-xs text-text-secondary mt-1">
+                    Affiche un point sur les salons avec des messages non-lus et un compteur pour les mentions non-lues.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showUnreadBadges}
+                  onClick={() => setShowUnreadBadges(!showUnreadBadges)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    showUnreadBadges ? 'bg-accent-pink' : 'bg-bg-hover'
+                  }`}
+                  title="Activer ou désactiver les badges non-lus"
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      showUnreadBadges ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
           )}
 

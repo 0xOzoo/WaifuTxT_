@@ -23,6 +23,7 @@ interface UiState {
   showSettingsModal: boolean
   isMobileMenuOpen: boolean
   showRoomMessagePreview: boolean
+  showUnreadBadges: boolean
   pendingMention: string | null
   pendingReply: PendingReply | null
   waifuOptIn: boolean
@@ -35,6 +36,7 @@ interface UiState {
   toggleMobileMenu: () => void
   toggleRoomMessagePreview: () => void
   setRoomMessagePreview: (show: boolean) => void
+  setShowUnreadBadges: (show: boolean) => void
   setPendingMention: (mention: string | null) => void
   setPendingReply: (reply: PendingReply | null) => void
   setWaifuOptIn: (enabled: boolean) => void
@@ -43,6 +45,7 @@ interface UiState {
 }
 
 const ROOM_PREVIEW_STORAGE_KEY = 'waifutxt_show_room_message_preview'
+const UNREAD_BADGES_STORAGE_KEY = 'waifutxt_show_unread_badges'
 const WAIFU_OPT_IN_STORAGE_KEY = 'waifutxt_waifu_opt_in'
 const WAIFU_SELECTED_STORAGE_KEY = 'waifutxt_waifu_selected'
 const TYPING_INDICATOR_STYLE_STORAGE_KEY = 'waifutxt_typing_indicator_style'
@@ -57,6 +60,18 @@ function readRoomPreviewPreference(): boolean {
 function persistRoomPreviewPreference(show: boolean): void {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(ROOM_PREVIEW_STORAGE_KEY, String(show))
+}
+
+function readUnreadBadges(): boolean {
+  if (typeof window === 'undefined') return true
+  const saved = window.localStorage.getItem(UNREAD_BADGES_STORAGE_KEY)
+  if (saved == null) return true
+  return saved === 'true'
+}
+
+function persistUnreadBadges(show: boolean): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(UNREAD_BADGES_STORAGE_KEY, String(show))
 }
 
 function readWaifuOptIn(): boolean {
@@ -98,6 +113,7 @@ export const useUiStore = create<UiState>((set) => ({
   showSettingsModal: false,
   isMobileMenuOpen: false,
   showRoomMessagePreview: readRoomPreviewPreference(),
+  showUnreadBadges: readUnreadBadges(),
   pendingMention: null,
   pendingReply: null,
   waifuOptIn: readWaifuOptIn(),
@@ -117,6 +133,10 @@ export const useUiStore = create<UiState>((set) => ({
   setRoomMessagePreview: (show) => {
     persistRoomPreviewPreference(show)
     set({ showRoomMessagePreview: show })
+  },
+  setShowUnreadBadges: (show) => {
+    persistUnreadBadges(show)
+    set({ showUnreadBadges: show })
   },
   setPendingMention: (mention) => set({ pendingMention: mention }),
   setPendingReply: (reply) => set({ pendingReply: reply }),
