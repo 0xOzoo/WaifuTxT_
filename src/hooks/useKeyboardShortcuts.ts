@@ -61,6 +61,28 @@ export function useKeyboardShortcuts() {
         }
       }
 
+      // Shift+ArrowUp (no active text input OR empty message input) → reply to last message in room
+      if (e.key === 'ArrowUp' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey &&
+          (!isTyping || isEmptyMessageInput) && activeRoomId) {
+        const messages = useMessageStore.getState().getMessages(activeRoomId)
+        const lastReplyable = [...messages].reverse().find((m) => !m.content.startsWith('🔒'))
+        if (lastReplyable) {
+          e.preventDefault()
+          useUiStore.getState().setPendingReply({
+            roomId: lastReplyable.roomId,
+            eventId: lastReplyable.eventId,
+            senderName: lastReplyable.senderName,
+            preview: lastReplyable.content,
+          })
+          // Focus the message input so the user can type the reply immediately
+          setTimeout(() => {
+            const textarea = document.querySelector('textarea[placeholder^="Envoyer"]') as HTMLTextAreaElement | null
+            textarea?.focus()
+          }, 0)
+          return
+        }
+      }
+
       // ArrowUp (no modifiers, no active text input OR empty message input) → edit last own message
       if (e.key === 'ArrowUp' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
           (!isTyping || isEmptyMessageInput) && activeRoomId) {

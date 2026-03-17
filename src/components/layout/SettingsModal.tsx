@@ -694,6 +694,7 @@ export function SettingsModal() {
               <div className="p-4 rounded-lg border border-border bg-bg-primary/40 space-y-3">
                 <h3 className="text-sm font-medium text-text-primary">Messages</h3>
                 <ShortcutRow keys={['↑']} label="Modifier le dernier message envoyé" />
+                <ShortcutRow keys={['Maj', '↑']} label="Répondre au dernier message du salon" />
                 <ShortcutRow keys={['Entrée']} label="Envoyer un message" />
                 <ShortcutRow keys={['Maj', 'Entrée']} label="Saut de ligne" />
                 <ShortcutRow keys={['Échap']} label="Annuler la réponse en cours" />
