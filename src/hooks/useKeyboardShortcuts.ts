@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { useRoomStore } from '../stores/roomStore'
 import { useUiStore } from '../stores/uiStore'
+import { useAuthStore } from '../stores/authStore'
+import { useMessageStore } from '../stores/messageStore'
 
 export function useKeyboardShortcuts() {
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
@@ -19,6 +21,11 @@ export function useKeyboardShortcuts() {
         target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
         target.contentEditable === 'true'
+      // True only when the message input textarea is the active element and empty
+      const isEmptyMessageInput =
+        target.tagName === 'TEXTAREA' &&
+        target.getAttribute('placeholder')?.startsWith('Envoyer') === true &&
+        (target as HTMLTextAreaElement).value.trim() === ''
 
       // Ctrl/Cmd+K → focus room search
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'k') {
@@ -41,10 +48,34 @@ export function useKeyboardShortcuts() {
         return
       }
 
-      // Escape → close settings modal
-      if (e.key === 'Escape' && showSettingsModal) {
-        setSettingsModal(false)
-        return
+      // Escape → close settings modal first, otherwise cancel pending reply
+      if (e.key === 'Escape') {
+        if (showSettingsModal) {
+          setSettingsModal(false)
+          return
+        }
+        const { pendingReply, setPendingReply } = useUiStore.getState()
+        if (pendingReply) {
+          setPendingReply(null)
+          return
+        }
+      }
+
+      // ArrowUp (no modifiers, no active text input OR empty message input) → edit last own message
+      if (e.key === 'ArrowUp' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
+          (!isTyping || isEmptyMessageInput) && activeRoomId) {
+        const myUserId = useAuthStore.getState().session?.userId
+        if (myUserId) {
+          const messages = useMessageStore.getState().getMessages(activeRoomId)
+          const lastEditable = [...messages]
+            .reverse()
+            .find((m) => m.sender === myUserId && m.type === 'm.text' && !m.content.startsWith('🔒'))
+          if (lastEditable) {
+            e.preventDefault()
+            useUiStore.getState().setEditTargetEventId(lastEditable.eventId)
+            return
+          }
+        }
       }
 
       // Alt+ArrowUp/Down → navigate between rooms (only when not focused in a text input)
