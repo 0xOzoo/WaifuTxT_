@@ -24,10 +24,12 @@ import { useMessageStore } from '../../stores/messageStore'
 import {
   decryptMediaUrl,
   getMessageReadersAtEvent,
+  getMessageReactions,
   getMediaUrlWithAccessToken,
   sendEditMessage,
   getUrlPreview,
   loadMediaWithAuth,
+  toggleReaction,
   type UrlPreviewData,
 } from '../../lib/matrix'
 import { useUiStore } from '../../stores/uiStore'
@@ -35,6 +37,7 @@ import { useUiStore } from '../../stores/uiStore'
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g
 const TOKEN_REGEX = /(https?:\/\/[^\s<>"']+|<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?)/g
 const MENTION_REGEX = /(<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?)/g
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 
 function mxidToMentionLabel(raw: string): string {
   const mxid = raw.replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '')
@@ -841,6 +844,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   )
   const session = useAuthStore((s) => s.session)
   const receiptsVersion = useMessageStore((s) => s.receiptsVersion)
+  const reactionsVersion = useMessageStore((s) => s.reactionsVersion)
   const replaceMessage = useMessageStore((s) => s.replaceMessage)
   const messagesMap = useMessageStore((s) => s.messages)
   const membersMap = useRoomStore((s) => s.members)
@@ -858,6 +862,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   const isOwnMessage = !!session?.userId && message.sender === session.userId
   const canEditMessage = isOwnMessage && message.type === 'm.text' && !message.content.startsWith('🔒')
   const canReplyMessage = !message.content.startsWith('🔒')
+  const canReactMessage = !message.content.startsWith('🔒')
   const readersUserIds = useMemo(
     () => (isOwnMessage ? getMessageReadersAtEvent(message.roomId, message.eventId, message.sender) : []),
     [isOwnMessage, message.roomId, message.eventId, message.sender, receiptsVersion],
@@ -874,11 +879,16 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
       }),
     [readersUserIds, roomMembers],
   )
+  const reactions = useMemo(
+    () => (canReactMessage ? getMessageReactions(message.roomId, message.eventId) : []),
+    [canReactMessage, message.roomId, message.eventId, reactionsVersion],
+  )
   const [showProfile, setShowProfile] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [editDraft, setEditDraft] = useState(message.content)
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  const [showReactionPicker, setShowReactionPicker] = useState(false)
   const senderNameRef = useRef<HTMLSpanElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -935,6 +945,15 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
     }
   }, [editDraft, message, replaceMessage])
 
+  const handleToggleReaction = useCallback(async (emoji: string) => {
+    try {
+      await toggleReaction(message.roomId, message.eventId, emoji)
+      useMessageStore.getState().bumpReactionsVersion()
+    } catch (err) {
+      console.error('[WaifuTxT] Toggle reaction failed:', err)
+    }
+  }, [message.roomId, message.eventId])
+
   return (
     <div ref={wrapperRef} className={`group relative flex items-start gap-4 px-4 py-0.5 pr-12 hover:bg-bg-hover/30 transition-colors ${showHeader ? 'mt-4' : ''}`}>
       {showHeader ? (
@@ -958,14 +977,47 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
                 preview: compactPreview(message.content || '(message)'),
               })
             }
-            className="absolute right-14 top-1.5 opacity-0 group-hover:opacity-100 text-text-muted hover:text-text-primary transition-opacity cursor-pointer"
+            className="absolute right-16 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 opacity-0 group-hover:opacity-100 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm"
             title="Répondre au message"
             aria-label="Répondre au message"
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5l-7.5-7.5 7.5-7.5M3 12h12a6 6 0 016 6v1.5" />
             </svg>
           </button>
+        )}
+
+        {canReactMessage && !isEditing && (
+          <div className="absolute right-2 top-1">
+            <button
+              onClick={() => setShowReactionPicker((v) => !v)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 opacity-0 group-hover:opacity-100 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm"
+              title="Réagir"
+              aria-label="Réagir"
+            >
+              <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+            {showReactionPicker && (
+              <div className="absolute right-0 mt-1 flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary px-1.5 py-1 shadow-lg z-20">
+                {QUICK_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    className="h-7 w-7 rounded-md hover:bg-bg-hover transition-colors text-base cursor-pointer"
+                    onClick={() => {
+                      setShowReactionPicker(false)
+                      void handleToggleReaction(emoji)
+                    }}
+                    title={`Réagir avec ${emoji}`}
+                    aria-label={`Réagir avec ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {canEditMessage && !isEditing && (
@@ -974,11 +1026,11 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
               setEditError(null)
               setIsEditing(true)
             }}
-            className="absolute right-8 top-1.5 opacity-0 group-hover:opacity-100 text-text-muted hover:text-text-primary transition-opacity cursor-pointer"
+            className="absolute right-9 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 opacity-0 group-hover:opacity-100 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm"
             title="Modifier le message"
             aria-label="Modifier le message"
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.1 2.1 0 113 2.974l-10.5 10.5-4.2 1.2 1.2-4.2 10.5-10.474z" />
             </svg>
           </button>
@@ -1109,6 +1161,26 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
 
         {!isEditing && message.isEdited && (
           <span className="mt-0.5 inline-block text-[10px] text-text-muted">(modifié)</span>
+        )}
+
+        {!isEditing && reactions.length > 0 && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {reactions.map((reaction) => (
+              <button
+                key={reaction.key}
+                onClick={() => void handleToggleReaction(reaction.key)}
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors cursor-pointer ${
+                  reaction.reactedByMe
+                    ? 'border-accent-pink/60 bg-accent-pink/20 text-text-primary'
+                    : 'border-border bg-bg-tertiary text-text-secondary hover:text-text-primary hover:border-border-strong'
+                }`}
+                title={reaction.senders.join(', ')}
+              >
+                <span className="text-sm leading-none">{reaction.key}</span>
+                <span>{reaction.count}</span>
+              </button>
+            ))}
+          </div>
         )}
 
       </div>

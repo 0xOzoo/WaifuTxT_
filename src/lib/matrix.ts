@@ -153,7 +153,12 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     try {
       if (!room) return
       const type = event.getType()
-      if (type !== 'm.room.message' && type !== 'm.room.encrypted') return
+      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction') return
+
+      if (type === 'm.reaction') {
+        useMessageStore.getState().bumpReactionsVersion()
+        return
+      }
 
       if (type === 'm.room.encrypted') {
         // Always show a placeholder immediately — Rust crypto is async so
@@ -233,7 +238,108 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     applyPresence(event.getSender(), event.getContent()?.presence)
   })
 
+  client.on(matrixSdk.ClientEvent.Event, (event: MatrixEvent) => {
+    if (event.getType() !== 'm.room.redaction') return
+    useMessageStore.getState().bumpReactionsVersion()
+  })
+
   setupVerificationListeners(client)
+}
+
+interface AnnotationContent {
+  rel_type?: string
+  event_id?: string
+  key?: string
+}
+
+interface ParsedReactionAnnotation {
+  event_id: string
+  key: string
+}
+
+export interface MessageReactionSummary {
+  key: string
+  count: number
+  senders: string[]
+  reactedByMe: boolean
+}
+
+function getReactionAnnotation(event: MatrixEvent): ParsedReactionAnnotation | null {
+  if (event.getType() !== 'm.reaction') return null
+  const content = event.getContent() as Record<string, unknown>
+  const relates = content['m.relates_to'] as AnnotationContent | undefined
+  if (!relates || relates.rel_type !== 'm.annotation') return null
+  if (!relates.event_id || !relates.key) return null
+  return { event_id: relates.event_id, key: relates.key }
+}
+
+export function getMessageReactions(roomId: string, eventId: string): MessageReactionSummary[] {
+  if (!client) return []
+  const room = client.getRoom(roomId)
+  if (!room) return []
+  const me = client.getUserId() || ''
+
+  const buckets = new Map<string, { senders: Set<string> }>()
+  const timeline = room.getLiveTimeline().getEvents()
+  for (const event of timeline) {
+    if (event.isRedacted?.()) continue
+    const annotation = getReactionAnnotation(event)
+    if (!annotation) continue
+    if (annotation.event_id !== eventId) continue
+    const sender = event.getSender()
+    if (!sender) continue
+    const bucket = buckets.get(annotation.key) || { senders: new Set<string>() }
+    bucket.senders.add(sender)
+    buckets.set(annotation.key, bucket)
+  }
+
+  return Array.from(buckets.entries())
+    .map(([key, bucket]) => {
+      const senders = Array.from(bucket.senders)
+      return {
+        key,
+        count: senders.length,
+        senders,
+        reactedByMe: !!me && senders.includes(me),
+      }
+    })
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+}
+
+function findOwnReactionEventId(roomId: string, eventId: string, key: string): string | null {
+  if (!client) return null
+  const room = client.getRoom(roomId)
+  const me = client.getUserId()
+  if (!room || !me) return null
+
+  for (const event of room.getLiveTimeline().getEvents()) {
+    if (event.isRedacted?.()) continue
+    if (event.getSender() !== me) continue
+    const annotation = getReactionAnnotation(event)
+    if (!annotation) continue
+    if (annotation.event_id === eventId && annotation.key === key) {
+      return event.getId() || null
+    }
+  }
+  return null
+}
+
+export async function toggleReaction(roomId: string, eventId: string, key: string): Promise<void> {
+  if (!client) return
+  const ownReactionEventId = findOwnReactionEventId(roomId, eventId, key)
+
+  if (ownReactionEventId) {
+    await client.redactEvent(roomId, ownReactionEventId)
+    return
+  }
+
+  await (client as any).sendEvent(roomId, 'm.reaction', {
+    'm.relates_to': {
+      rel_type: 'm.annotation',
+      event_id: eventId,
+      key,
+    },
+  } as any)
 }
 
 function syncRooms() {
