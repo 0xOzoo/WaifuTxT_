@@ -889,6 +889,9 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [showReactionPicker, setShowReactionPicker] = useState(false)
+  const showActionBar = !isEditing && (canReplyMessage || canEditMessage || canReactMessage)
+  const actionButtonClass =
+    'inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm'
   const senderNameRef = useRef<HTMLSpanElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -955,7 +958,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   }, [message.roomId, message.eventId])
 
   return (
-    <div ref={wrapperRef} className={`group relative flex items-start gap-4 px-4 py-0.5 pr-12 hover:bg-bg-hover/30 transition-colors ${showHeader ? 'mt-4' : ''}`}>
+    <div ref={wrapperRef} className={`group relative flex items-start gap-4 px-4 py-0.5 pr-24 hover:bg-bg-hover/30 transition-colors ${showHeader ? 'mt-4' : ''}`}>
       {showHeader ? (
         <Avatar src={message.senderAvatar} name={message.senderName} size={40} className="mt-0.5" />
       ) : (
@@ -967,73 +970,77 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
       )}
 
       <div className="flex-1 min-w-0">
-        {canReplyMessage && !isEditing && (
-          <button
-            onClick={() =>
-              setPendingReply({
-                roomId: message.roomId,
-                eventId: message.eventId,
-                senderName: message.senderName,
-                preview: compactPreview(message.content || '(message)'),
-              })
-            }
-            className="absolute right-16 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 opacity-0 group-hover:opacity-100 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm"
-            title="Répondre au message"
-            aria-label="Répondre au message"
-          >
-            <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5l-7.5-7.5 7.5-7.5M3 12h12a6 6 0 016 6v1.5" />
-            </svg>
-          </button>
-        )}
+        {showActionBar && (
+          <div className="absolute right-2 top-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {canReplyMessage && (
+              <button
+                onClick={() =>
+                  setPendingReply({
+                    roomId: message.roomId,
+                    eventId: message.eventId,
+                    senderName: message.senderName,
+                    preview: compactPreview(message.content || '(message)'),
+                  })
+                }
+                className={actionButtonClass}
+                title="Répondre au message"
+                aria-label="Répondre au message"
+              >
+                <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5l-7.5-7.5 7.5-7.5M3 12h12a6 6 0 016 6v1.5" />
+                </svg>
+              </button>
+            )}
 
-        {canReactMessage && !isEditing && (
-          <div className="absolute right-2 top-1">
-            <button
-              onClick={() => setShowReactionPicker((v) => !v)}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 opacity-0 group-hover:opacity-100 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm"
-              title="Réagir"
-              aria-label="Réagir"
-            >
-              <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-            {showReactionPicker && (
-              <div className="absolute right-0 mt-1 flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary px-1.5 py-1 shadow-lg z-20">
-                {QUICK_REACTIONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    className="h-7 w-7 rounded-md hover:bg-bg-hover transition-colors text-base cursor-pointer"
-                    onClick={() => {
-                      setShowReactionPicker(false)
-                      void handleToggleReaction(emoji)
-                    }}
-                    title={`Réagir avec ${emoji}`}
-                    aria-label={`Réagir avec ${emoji}`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
+            {canEditMessage && (
+              <button
+                onClick={() => {
+                  setEditError(null)
+                  setIsEditing(true)
+                }}
+                className={actionButtonClass}
+                title="Modifier le message"
+                aria-label="Modifier le message"
+              >
+                <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.1 2.1 0 113 2.974l-10.5 10.5-4.2 1.2 1.2-4.2 10.5-10.474z" />
+                </svg>
+              </button>
+            )}
+
+            {canReactMessage && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowReactionPicker((v) => !v)}
+                  className={actionButtonClass}
+                  title="Réagir"
+                  aria-label="Réagir"
+                >
+                  <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </button>
+                {showReactionPicker && (
+                  <div className="absolute right-0 mt-1 flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary px-1.5 py-1 shadow-lg z-20">
+                    {QUICK_REACTIONS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        className="h-7 w-7 rounded-md hover:bg-bg-hover transition-colors text-base cursor-pointer"
+                        onClick={() => {
+                          setShowReactionPicker(false)
+                          void handleToggleReaction(emoji)
+                        }}
+                        title={`Réagir avec ${emoji}`}
+                        aria-label={`Réagir avec ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
-
-        {canEditMessage && !isEditing && (
-          <button
-            onClick={() => {
-              setEditError(null)
-              setIsEditing(true)
-            }}
-            className="absolute right-9 top-1 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 opacity-0 group-hover:opacity-100 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm"
-            title="Modifier le message"
-            aria-label="Modifier le message"
-          >
-            <svg className="w-4.5 h-4.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.1 2.1 0 113 2.974l-10.5 10.5-4.2 1.2 1.2-4.2 10.5-10.474z" />
-            </svg>
-          </button>
         )}
 
         {showHeader && (
