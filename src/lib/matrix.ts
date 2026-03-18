@@ -153,9 +153,37 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     try {
       if (!room) return
       const type = event.getType()
-      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction') return
+      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction' && type !== 'm.room.redaction') return
 
       if (type === 'm.reaction') {
+        useMessageStore.getState().bumpReactionsVersion()
+        return
+      }
+
+      if (type === 'm.room.redaction') {
+        const redactedEventId = getRedactedEventId(event)
+        if (!redactedEventId) return
+        const store = useMessageStore.getState()
+        const existing = store.getMessages(room.roomId).find((m) => m.eventId === redactedEventId)
+        if (existing) {
+          const deletedMessage: MessageEvent = {
+            ...existing,
+            type: 'm.notice',
+            content: 'Message supprimé',
+            htmlContent: null,
+            isEdited: false,
+            imageUrl: undefined,
+            imageInfo: undefined,
+            thumbnailUrl: undefined,
+            fileName: undefined,
+            fileUrl: undefined,
+            fileSize: undefined,
+            encryptedFile: undefined,
+            encryptedThumbnailFile: undefined,
+          }
+          store.replaceMessage(room.roomId, redactedEventId, deletedMessage)
+          updateRoomLastMessage(room.roomId, deletedMessage)
+        }
         useMessageStore.getState().bumpReactionsVersion()
         return
       }
@@ -255,6 +283,16 @@ interface AnnotationContent {
 interface ParsedReactionAnnotation {
   event_id: string
   key: string
+}
+
+function getRedactedEventId(redactionEvent: MatrixEvent): string | null {
+  if (redactionEvent.getType() !== 'm.room.redaction') return null
+  const fromMethod = (redactionEvent as unknown as { getAssociatedId?: () => string | null }).getAssociatedId?.()
+  if (fromMethod) return fromMethod
+  const fromWire = ((redactionEvent as unknown as { event?: { redacts?: string } }).event?.redacts) || null
+  if (fromWire) return fromWire
+  const fromContent = (redactionEvent.getContent()?.redacts as string | undefined) || null
+  return fromContent
 }
 
 export interface MessageReactionSummary {
@@ -468,6 +506,32 @@ function encryptedFallbackMessage(event: MatrixEvent, roomId: string): MessageEv
   }
 }
 
+function deletedFallbackMessage(event: MatrixEvent, roomId: string): MessageEvent | null {
+  const sender = event.getSender()
+  if (!sender) return null
+  const room = client?.getRoom(roomId)
+  const member = room?.getMember(sender)
+  let senderAvatar: string | null = null
+  try {
+    senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
+  } catch {
+    // ignore
+  }
+  return {
+    eventId: event.getId() || `${roomId}-${event.getTs()}`,
+    roomId,
+    sender,
+    senderName: member?.name || sender,
+    senderAvatar,
+    content: 'Message supprimé',
+    htmlContent: null,
+    timestamp: event.getTs(),
+    type: 'm.notice',
+    replyTo: null,
+    isEdited: false,
+  }
+}
+
 function updateRoomLastMessage(roomId: string, msg: MessageEvent) {
   useRoomStore.getState().updateRoom(roomId, {
     lastMessage: msg.content,
@@ -494,6 +558,7 @@ function applyMessageEdit(roomId: string, editMessage: MessageEvent): boolean {
 }
 
 function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null {
+  if (event.isRedacted?.()) return deletedFallbackMessage(event, roomId)
   // Check encrypted states BEFORE inspecting content:
   // • type still 'm.room.encrypted' → decryption pending or not yet attempted
   // • isDecryptionFailure → attempted but failed (no keys)

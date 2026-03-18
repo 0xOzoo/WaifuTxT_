@@ -950,6 +950,8 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   const canEditMessage = isOwnMessage && message.type === 'm.text' && !message.content.startsWith('🔒')
   const canReplyMessage = !message.content.startsWith('🔒')
   const canReactMessage = !message.content.startsWith('🔒')
+  const isDeletedNoticeMessage =
+    message.type === 'm.notice' && message.content.trim().toLowerCase() === 'message supprimé'
   const readersUserIds = useMemo(
     () => (isOwnMessage ? getMessageReadersAtEvent(message.roomId, message.eventId, message.sender) : []),
     [isOwnMessage, message.roomId, message.eventId, message.sender, receiptsVersion],
@@ -1255,6 +1257,13 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
                       </svg>
                       Message chiffré — clé de récupération requise
                     </span>
+                  </p>
+                ) : isDeletedNoticeMessage ? (
+                  <p className="inline-flex items-center gap-1.5 text-sm leading-relaxed break-words text-text-muted italic">
+                    <svg className="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 7h12m-9 0V5.75A1.75 1.75 0 0110.75 4h2.5A1.75 1.75 0 0115 5.75V7m-8 0l.75 11.25A1.75 1.75 0 009.5 20h5a1.75 1.75 0 001.75-1.75L17 7" />
+                    </svg>
+                    Message supprimé
                   </p>
                 ) : (
                   <MarkdownText
