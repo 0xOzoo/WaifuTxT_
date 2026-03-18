@@ -1,6 +1,7 @@
 import type { MatrixSession, MessageEvent, RoomSummary, RoomMember, EncryptedFileInfo } from '../types/matrix'
 import { useMessageStore } from '../stores/messageStore'
 import { useRoomStore } from '../stores/roomStore'
+import { useAuthStore } from '../stores/authStore'
 import { setupVerificationListeners } from './verification'
 
 type MatrixClient = import('matrix-js-sdk').MatrixClient
@@ -20,6 +21,18 @@ async function getSDK() {
 }
 
 export function getClient(): MatrixClient | null {
+  return client
+}
+
+async function ensureClientReady(): Promise<MatrixClient> {
+  if (client) return client
+
+  const authStore = useAuthStore.getState()
+  const restoredSession = authStore.session || authStore.restoreSession()
+  if (!restoredSession) throw new Error('Session introuvable, reconnecte-toi.')
+
+  await initClient(restoredSession)
+  if (!client) throw new Error('Client non initialisé')
   return client
 }
 
@@ -389,6 +402,11 @@ function syncRooms() {
   const activeRoomId = useRoomStore.getState().activeRoomId
 
   for (const room of matrixRooms) {
+    const membership = room.getMyMembership()
+    // Keep only rooms the current user is actively joined to.
+    // This prevents stale spaces/rooms from lingering after deletion/leave from another client (e.g. Element).
+    if (membership !== 'join') continue
+
     const createEvent = room.currentState.getStateEvents('m.room.create')?.[0]
     const isSpace = createEvent?.getContent()?.type === 'm.space'
     const roomType = (room.getType?.() || createEvent?.getContent()?.type || '') as string
@@ -472,12 +490,21 @@ function syncRooms() {
       mentionCount: room.roomId === activeRoomId ? 0 : (room.getUnreadNotificationCount('highlight' as any) || 0),
       isSpace,
       isDirect,
-      membership: room.getMyMembership(),
+      membership,
       children,
     })
   }
 
-  useRoomStore.getState().setRooms(roomMap)
+  const roomStore = useRoomStore.getState()
+  roomStore.setRooms(roomMap)
+
+  // If current selections no longer exist after sync, reset them to avoid UI pointing to removed rooms/spaces.
+  if (roomStore.activeRoomId && !roomMap.has(roomStore.activeRoomId)) {
+    roomStore.setActiveRoom(null)
+  }
+  if (roomStore.activeSpaceId && !roomMap.has(roomStore.activeSpaceId)) {
+    roomStore.setActiveSpace(null)
+  }
 }
 
 function encryptedFallbackMessage(event: MatrixEvent, roomId: string): MessageEvent | null {
@@ -750,6 +777,45 @@ export async function getOrCreateDmRoom(userId: string): Promise<string> {
     preset: 'trusted_private_chat',
   } as any)
   return created.room_id
+}
+
+export async function createSpace(
+  name: string,
+  options?: { visibility?: 'public' | 'private' },
+): Promise<string> {
+  const readyClient = await ensureClientReady()
+  const trimmedName = name.trim()
+  if (!trimmedName) throw new Error('Le nom du serveur est requis')
+  const visibility = options?.visibility === 'public' ? 'public' : 'private'
+
+  try {
+    const created = await readyClient.createRoom({
+      name: trimmedName,
+      topic: `Serveur ${trimmedName}`,
+      preset: visibility === 'public' ? 'public_chat' : 'private_chat',
+      visibility,
+      creation_content: {
+        type: 'm.space',
+      },
+    } as any)
+    return created.room_id
+  } catch (firstErr) {
+    // Compatibility fallback for homeservers that reject preset/visibility combos for spaces.
+    try {
+      const created = await readyClient.createRoom({
+        name: trimmedName,
+        creation_content: {
+          type: 'm.space',
+        },
+      } as any)
+      return created.room_id
+    } catch (fallbackErr) {
+      const err = fallbackErr || firstErr
+      const errorData = err as { data?: { error?: string }; message?: string }
+      const msg = errorData?.data?.error || errorData?.message || 'Impossible de créer le serveur'
+      throw new Error(msg)
+    }
+  }
 }
 
 export async function sendImage(roomId: string, file: File): Promise<void> {
