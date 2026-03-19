@@ -3,7 +3,15 @@ import { useRoomStore } from '../../stores/roomStore'
 import { Avatar } from '../common/Avatar'
 import { useAuthStore } from '../../stores/authStore'
 import { useUiStore } from '../../stores/uiStore'
-import { getOwnAvatarUrl, getRoomMemberProfileBasics, getUserProfileBasics, loadRoomMembers, setOwnPresence } from '../../lib/matrix'
+import {
+  getOwnAvatarUrl,
+  getRoomMemberProfileBasics,
+  getUserProfileBasics,
+  joinVoiceRoom,
+  leaveVoiceRoom,
+  loadRoomMembers,
+  setOwnPresence,
+} from '../../lib/matrix'
 import { getWaifuById } from '../../lib/waifu'
 import type { PresenceValue } from '../../stores/uiStore'
 
@@ -35,6 +43,7 @@ export function RoomSidebar() {
   const [search, setSearch] = useState('')
   const [isMuted, setIsMuted] = useState(false)
   const [isDeafened, setIsDeafened] = useState(false)
+  const [voiceActionRoomId, setVoiceActionRoomId] = useState<string | null>(null)
   const [showPresenceMenu, setShowPresenceMenu] = useState(false)
   const [ownPresence, setOwnPresenceStore] = useState<PresenceValue>(() => {
     const stored = localStorage.getItem('waifutxt_presence')
@@ -199,6 +208,31 @@ export function RoomSidebar() {
   }, [filtered, membersByRoom, voiceProfileMap])
 
   const spaceName = activeSpaceId ? rooms.get(activeSpaceId)?.name || 'Space' : 'Messages'
+  const joinedVoiceRoomId = useMemo(() => {
+    for (const room of rooms.values()) {
+      if (!isVoiceRoom(room)) continue
+      if (room.voiceJoinedByMe) return room.roomId
+    }
+    return null
+  }, [rooms])
+
+  const handleVoiceJoinLeave = async (roomId: string, joined: boolean) => {
+    if (voiceActionRoomId) return
+    setVoiceActionRoomId(roomId)
+    try {
+      if (joined) {
+        await leaveVoiceRoom(roomId)
+      } else {
+        await joinVoiceRoom(roomId)
+        setActiveRoom(roomId)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Action vocale impossible'
+      console.error('[Voice] join/leave failed:', message)
+    } finally {
+      setVoiceActionRoomId(null)
+    }
+  }
 
   return (
     <div className="w-60 bg-bg-secondary flex flex-col border-r border-border">
@@ -221,6 +255,7 @@ export function RoomSidebar() {
       <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
         {filtered.map((room) => {
           const isVoice = isVoiceRoom(room)
+          const isJoinedVoice = joinedVoiceRoomId === room.roomId
           const participants = room.voiceParticipants || []
           const roomMembers = membersByRoom.get(room.roomId) || []
           return (
@@ -247,16 +282,34 @@ export function RoomSidebar() {
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1.5">
-                    <span className={`text-sm truncate ${room.unreadCount > 0 && activeRoomId !== room.roomId ? 'font-semibold' : 'font-medium'}`}>
-                      {room.name}
-                    </span>
-                    {showMentionBadge && activeRoomId !== room.roomId && room.mentionCount > 0 ? (
-                      <span className="shrink-0 flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-accent-pink">
-                        {room.mentionCount > 99 ? '99+' : room.mentionCount}
-                      </span>
-                    ) : showUnreadDot && activeRoomId !== room.roomId && room.unreadCount > 0 ? (
-                      <span className="shrink-0 w-2 h-2 rounded-full bg-accent-pink" />
-                    ) : null}
+                    <span className={`text-sm truncate ${room.unreadCount > 0 && activeRoomId !== room.roomId ? 'font-semibold' : 'font-medium'}`}>{room.name}</span>
+                    <div className="flex items-center gap-1">
+                      {isVoice && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleVoiceJoinLeave(room.roomId, isJoinedVoice)
+                          }}
+                          disabled={voiceActionRoomId === room.roomId}
+                          className={`shrink-0 inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition-colors cursor-pointer ${
+                            isJoinedVoice
+                              ? 'text-danger bg-danger/12 hover:bg-danger/20'
+                              : 'text-success bg-success/12 hover:bg-success/20'
+                          } ${voiceActionRoomId === room.roomId ? 'opacity-60 cursor-wait' : ''}`}
+                          title={isJoinedVoice ? 'Quitter le vocal' : 'Rejoindre le vocal'}
+                          aria-label={isJoinedVoice ? 'Quitter le vocal' : 'Rejoindre le vocal'}
+                        >
+                          {voiceActionRoomId === room.roomId ? '...' : isJoinedVoice ? 'Quitter' : 'Rejoindre'}
+                        </button>
+                      )}
+                      {showMentionBadge && activeRoomId !== room.roomId && room.mentionCount > 0 ? (
+                        <span className="shrink-0 flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-accent-pink">
+                          {room.mentionCount > 99 ? '99+' : room.mentionCount}
+                        </span>
+                      ) : showUnreadDot && activeRoomId !== room.roomId && room.unreadCount > 0 ? (
+                        <span className="shrink-0 w-2 h-2 rounded-full bg-accent-pink" />
+                      ) : null}
+                    </div>
                   </div>
                   {showRoomMessagePreview && room.lastMessage && (
                     <p className="text-xs text-text-muted truncate">{room.lastMessage}</p>

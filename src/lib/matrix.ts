@@ -11,6 +11,7 @@ type MatrixRoom = import('matrix-js-sdk').Room
 let client: MatrixClient | null = null
 let sdk: typeof import('matrix-js-sdk') | null = null
 let pendingSecretStorageKey: { keyId: string; key: Uint8Array } | null = null
+let voiceRefreshInterval: ReturnType<typeof setInterval> | null = null
 const mediaBlobCache = new Map<string, string>()
 const mediaBlobPromiseCache = new Map<string, Promise<string | null>>()
 const decryptedUrlCache = new Map<string, string>()
@@ -25,6 +26,15 @@ function isVoiceDebugEnabled(): boolean {
   } catch {
     return false
   }
+}
+
+function voiceDebugLog(message: string, extra?: unknown): void {
+  if (!isVoiceDebugEnabled()) return
+  if (extra !== undefined) {
+    console.log(`[voice] ${message}`, extra)
+    return
+  }
+  console.log(`[voice] ${message}`)
 }
 
 async function getSDK() {
@@ -149,6 +159,10 @@ export async function logout(): Promise<void> {
     // ignore
   }
   client.stopClient()
+  if (voiceRefreshInterval) {
+    clearInterval(voiceRefreshInterval)
+    voiceRefreshInterval = null
+  }
   client = null
   useRoomStore.getState().reset()
   useMessageStore.getState().reset()
@@ -305,6 +319,17 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     syncRooms()
   })
 
+  // Some homeservers keep stale call-member state longer than Element's UI.
+  // Lightweight heartbeat keeps participant lists aligned with active memberships.
+  if (voiceRefreshInterval) clearInterval(voiceRefreshInterval)
+  voiceRefreshInterval = setInterval(() => {
+    try {
+      syncRooms()
+    } catch {
+      // ignore periodic sync errors
+    }
+  }, 7000)
+
   setupVerificationListeners(client)
 }
 
@@ -420,6 +445,9 @@ function syncRooms() {
   const roomMap = new Map<string, RoomSummary>()
   const baseUrl = client.baseUrl
   const myUserId = client.getUserId() || ''
+  const myDeviceId = client.getDeviceId() || ''
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rtcManager = (client as any).matrixRTC
   const activeRoomId = useRoomStore.getState().activeRoomId
 
   for (const room of matrixRooms) {
@@ -437,7 +465,59 @@ function syncRooms() {
       room.currentState.getStateEvents('m.call.member')?.length > 0 ||
       room.currentState.getStateEvents('org.matrix.msc4143.rtc.member')?.length > 0
     const isVoice = /call|voice/i.test(roomType) || hasCallState
-    const voiceParticipants = isVoice ? getVoiceParticipants(room, baseUrl) : []
+    let voiceParticipants: Array<{ userId: string; displayName: string; avatarUrl: string | null }> = []
+    let voiceJoinedByMe = false
+    if (isVoice) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const groupCall = (client as any).getGroupCallForRoom?.(room.roomId)
+        if (groupCall?.hasLocalParticipant?.()) {
+          voiceJoinedByMe = true
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (isVoice && !voiceJoinedByMe && rtcManager?.getRoomSession) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const session = (rtcManager.getActiveRoomSession?.(room) || rtcManager.getRoomSession(room)) as any
+        if (session) {
+          voiceJoinedByMe = isMyVoiceMembership(session, myUserId, myDeviceId) || !!session.isJoined?.()
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (isVoice) {
+      let participantIds: string[] = []
+      try {
+        if (rtcManager?.getRoomSession) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const session = (rtcManager.getActiveRoomSession?.(room) || rtcManager.getRoomSession(room)) as any
+          participantIds = getActiveVoiceParticipantIdsFromSession(session)
+        }
+      } catch {
+        // ignore and try GroupCall participant source below
+      }
+      if (participantIds.length === 0) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const groupCall = (client as any).getGroupCallForRoom?.(room.roomId) as any
+          if (groupCall?.participants instanceof Map) {
+            const fromGroupCall = new Set<string>()
+            for (const member of groupCall.participants.keys()) {
+              const userId = normalizeVoiceUserId((member as { userId?: string } | null)?.userId)
+              if (userId) fromGroupCall.add(userId)
+            }
+            participantIds = Array.from(fromGroupCall)
+          }
+        } catch {
+          // ignore
+        }
+      }
+      voiceParticipants = getVoiceParticipants(room, baseUrl, participantIds)
+    }
 
     const children: string[] = []
     if (isSpace) {
@@ -480,6 +560,7 @@ function syncRooms() {
       avatarUrl,
       roomType,
       isVoice,
+      voiceJoinedByMe,
       voiceParticipants,
       topic,
       lastMessage: lastMessageText,
@@ -597,11 +678,28 @@ function collectVoiceParticipantIds(room: MatrixRoom): string[] {
   return Array.from(ids)
 }
 
+function getActiveVoiceParticipantIdsFromSession(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: any,
+): string[] {
+  const ids = new Set<string>()
+  const memberships = Array.isArray(session?.memberships) ? session.memberships : []
+  for (const membership of memberships) {
+    if (!membership || typeof membership !== 'object') continue
+    const m = membership as { userId?: unknown; isExpired?: unknown }
+    if (typeof m.isExpired === 'function' && (m.isExpired as () => boolean)()) continue
+    const userId = normalizeVoiceUserId(m.userId)
+    if (userId) ids.add(userId)
+  }
+  return Array.from(ids)
+}
+
 function getVoiceParticipants(
   room: MatrixRoom,
   baseUrl: string,
+  participantIds: string[],
 ): Array<{ userId: string; displayName: string; avatarUrl: string | null }> {
-  const userIds = collectVoiceParticipantIds(room)
+  const userIds = participantIds
   if (userIds.length === 0) return []
 
   const participants = userIds.map((userId) => {
@@ -1068,6 +1166,219 @@ export async function createSpace(
       throw new Error(msg)
     }
   }
+}
+
+function isMyVoiceMembership(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  session: any,
+  userId: string,
+  deviceId?: string,
+): boolean {
+  const memberships = Array.isArray(session?.memberships) ? session.memberships : []
+  for (const m of memberships) {
+    if (!m || typeof m !== 'object') continue
+    if (m.userId !== userId) continue
+    if (deviceId && m.deviceId && m.deviceId !== deviceId) continue
+    if (typeof m.isExpired === 'function' && m.isExpired()) continue
+    return true
+  }
+  return false
+}
+
+export async function joinVoiceRoom(roomId: string): Promise<void> {
+  if (!client) throw new Error('Client non initialisé')
+  const room = client.getRoom(roomId)
+  if (!room) throw new Error('Salon introuvable')
+
+  const matrixSdk = await getSDK()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clientAny = client as any
+  const canUseGroupCall =
+    typeof clientAny.getGroupCallForRoom === 'function' &&
+    typeof clientAny.createGroupCall === 'function' &&
+    typeof clientAny.waitUntilRoomReadyForGroupCalls === 'function'
+
+  if (canUseGroupCall) {
+    voiceDebugLog('join: using GroupCall path', { roomId })
+    try {
+      await clientAny.waitUntilRoomReadyForGroupCalls(roomId)
+    } catch {
+      // ignore readiness race and continue
+      voiceDebugLog('join: waitUntilRoomReadyForGroupCalls failed (ignored)', { roomId })
+    }
+
+    // Discord-like behavior: one active voice room at a time.
+    for (const r of client.getRooms()) {
+      if (r.roomId === roomId) continue
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const otherCall = clientAny.getGroupCallForRoom(r.roomId) as any
+        if (otherCall?.hasLocalParticipant?.()) {
+          voiceDebugLog('join: leaving previous GroupCall', { roomId: r.roomId })
+          otherCall.leave?.()
+        }
+      } catch {
+        // ignore per-room errors and continue
+        voiceDebugLog('join: failed to leave previous GroupCall (ignored)', { roomId: r.roomId })
+      }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let targetCall = clientAny.getGroupCallForRoom(roomId) as any
+    if (!targetCall) {
+      try {
+        voiceDebugLog('join: creating GroupCall', { roomId })
+        targetCall = await clientAny.createGroupCall(
+          roomId,
+          matrixSdk.GroupCallType.Voice,
+          false,
+          matrixSdk.GroupCallIntent.Room,
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // Another client may have created it in the meantime.
+        if (!/already has an existing group call/i.test(msg)) {
+          voiceDebugLog('join: createGroupCall failed', { roomId, msg })
+          throw err
+        }
+        voiceDebugLog('join: GroupCall already exists, reloading', { roomId })
+        targetCall = clientAny.getGroupCallForRoom(roomId)
+      }
+    }
+
+    if (targetCall) {
+      const alreadyInCall = !!targetCall.hasLocalParticipant?.()
+      if (!alreadyInCall) {
+        voiceDebugLog('join: entering GroupCall', { roomId })
+        await targetCall.enter?.()
+        try {
+          await targetCall.setMicrophoneMuted?.(false)
+        } catch {
+          // non-blocking
+          voiceDebugLog('join: unable to unmute mic after enter (ignored)', { roomId })
+        }
+      }
+      voiceDebugLog('join: GroupCall success', { roomId, alreadyInCall })
+      syncRooms()
+      setTimeout(() => {
+        try { syncRooms() } catch { /* ignore */ }
+      }, 800)
+      return
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rtcManager = (client as any).matrixRTC
+  if (!rtcManager || typeof rtcManager.getRoomSession !== 'function') {
+    throw new Error('Fonction vocal non disponible')
+  }
+  voiceDebugLog('join: fallback MatrixRTC path', { roomId })
+
+  const myUserId = client.getUserId()
+  const myDeviceId = client.getDeviceId() || ''
+  if (!myUserId) throw new Error('Utilisateur non identifié')
+
+  // Discord-like behavior: one active voice channel at a time, switch in one click.
+  for (const r of client.getRooms()) {
+    if (r.roomId === roomId) continue
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const session = (rtcManager.getActiveRoomSession?.(r) || rtcManager.getRoomSession(r)) as any
+      if (!session) continue
+      const iAmInThisSession = isMyVoiceMembership(session, myUserId, myDeviceId) || !!session.isJoined?.()
+      if (iAmInThisSession) {
+        await session.leaveRoomSession?.(5000)
+      }
+    } catch {
+      // ignore room switch failures and keep trying target room
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const targetSession = rtcManager.getRoomSession(room) as any
+  if (!targetSession) throw new Error('Session vocale indisponible')
+
+  const alreadyInTarget = isMyVoiceMembership(targetSession, myUserId, myDeviceId) || !!targetSession.isJoined?.()
+  if (!alreadyInTarget) {
+    // Some stacks require an explicit focus candidate. Reuse the oldest member transport when available.
+    const oldest = targetSession.getOldestMembership?.()
+    const preferredFocus = oldest?.getTransport?.(oldest)
+    const fociPreferred = preferredFocus ? [preferredFocus] : []
+
+    targetSession.joinRoomSession?.(
+      fociPreferred,
+      undefined,
+      {
+        callIntent: 'audio',
+        notificationType: 'notification',
+      },
+    )
+  }
+
+  syncRooms()
+  // refresh once more after local/remote echo of membership event
+  setTimeout(() => {
+    try { syncRooms() } catch { /* ignore */ }
+  }, 800)
+}
+
+export async function leaveVoiceRoom(roomId: string): Promise<void> {
+  if (!client) throw new Error('Client non initialisé')
+  const room = client.getRoom(roomId)
+  if (!room) throw new Error('Salon introuvable')
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clientAny = client as any
+  const canUseGroupCall =
+    typeof clientAny.getGroupCallForRoom === 'function' &&
+    typeof clientAny.waitUntilRoomReadyForGroupCalls === 'function'
+  if (canUseGroupCall) {
+    voiceDebugLog('leave: using GroupCall path', { roomId })
+    try {
+      await clientAny.waitUntilRoomReadyForGroupCalls(roomId)
+    } catch {
+      // ignore
+      voiceDebugLog('leave: waitUntilRoomReadyForGroupCalls failed (ignored)', { roomId })
+    }
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const call = clientAny.getGroupCallForRoom(roomId) as any
+      if (call?.hasLocalParticipant?.()) {
+        voiceDebugLog('leave: leaving GroupCall', { roomId })
+        call.leave?.()
+        syncRooms()
+        setTimeout(() => {
+          try { syncRooms() } catch { /* ignore */ }
+        }, 500)
+        return
+      }
+      voiceDebugLog('leave: no local GroupCall participant, fallback MatrixRTC', { roomId })
+    } catch {
+      // fallback MatrixRTC below
+      voiceDebugLog('leave: GroupCall leave failed, fallback MatrixRTC', { roomId })
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rtcManager = (client as any).matrixRTC
+  if (!rtcManager || typeof rtcManager.getRoomSession !== 'function') {
+    throw new Error('Fonction vocal non disponible')
+  }
+  voiceDebugLog('leave: MatrixRTC path', { roomId })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const session = (rtcManager.getActiveRoomSession?.(room) || rtcManager.getRoomSession(room)) as any
+  if (!session) return
+
+  const myUserId = client.getUserId() || ''
+  const myDeviceId = client.getDeviceId() || ''
+  const iAmInThisSession = isMyVoiceMembership(session, myUserId, myDeviceId) || !!session.isJoined?.()
+  if (!iAmInThisSession) {
+    syncRooms()
+    return
+  }
+
+  await session.leaveRoomSession?.(5000)
+  syncRooms()
 }
 
 export async function sendImage(roomId: string, file: File): Promise<void> {

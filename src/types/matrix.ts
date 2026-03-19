@@ -11,6 +11,7 @@ export interface RoomSummary {
   avatarUrl: string | null
   roomType?: string
   isVoice?: boolean
+  voiceJoinedByMe?: boolean
   voiceParticipants?: Array<{
     userId: string
     displayName: string
