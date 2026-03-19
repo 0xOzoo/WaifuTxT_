@@ -6,6 +6,7 @@ import { setupVerificationListeners } from './verification'
 
 type MatrixClient = import('matrix-js-sdk').MatrixClient
 type MatrixEvent = import('matrix-js-sdk').MatrixEvent
+type MatrixRoom = import('matrix-js-sdk').Room
 
 let client: MatrixClient | null = null
 let sdk: typeof import('matrix-js-sdk') | null = null
@@ -14,6 +15,17 @@ const mediaBlobCache = new Map<string, string>()
 const mediaBlobPromiseCache = new Map<string, Promise<string | null>>()
 const decryptedUrlCache = new Map<string, string>()
 const decryptPromiseCache = new Map<string, Promise<string>>()
+const userProfileCache = new Map<string, { displayName: string | null; avatarUrl: string | null }>()
+const roomJoinedMembersCache = new Map<string, Map<string, { displayName: string | null; avatarMxc: string | null }>>()
+
+function isVoiceDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem('waifutxt_debug_voice') === '1'
+  } catch {
+    return false
+  }
+}
 
 async function getSDK() {
   if (!sdk) sdk = await import('matrix-js-sdk')
@@ -284,6 +296,15 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     useMessageStore.getState().bumpReactionsVersion()
   })
 
+  // Keep voice participant lists fresh when call membership state changes.
+  client.on(matrixSdk.ClientEvent.Event, (event: MatrixEvent) => {
+    const type = event.getType()
+    if (type !== 'm.call.member' && type !== 'org.matrix.msc3401.call.member' && type !== 'org.matrix.msc4143.rtc.member') {
+      return
+    }
+    syncRooms()
+  })
+
   setupVerificationListeners(client)
 }
 
@@ -416,6 +437,7 @@ function syncRooms() {
       room.currentState.getStateEvents('m.call.member')?.length > 0 ||
       room.currentState.getStateEvents('org.matrix.msc4143.rtc.member')?.length > 0
     const isVoice = /call|voice/i.test(roomType) || hasCallState
+    const voiceParticipants = isVoice ? getVoiceParticipants(room, baseUrl) : []
 
     const children: string[] = []
     if (isSpace) {
@@ -458,6 +480,7 @@ function syncRooms() {
       avatarUrl,
       roomType,
       isVoice,
+      voiceParticipants,
       topic,
       lastMessage: lastMessageText,
       lastMessageTs: lastEvent?.getTs() || 0,
@@ -505,6 +528,235 @@ function syncRooms() {
   if (roomStore.activeSpaceId && !roomMap.has(roomStore.activeSpaceId)) {
     roomStore.setActiveSpace(null)
   }
+}
+
+const CALL_MEMBER_EVENT_TYPES = ['m.call.member', 'org.matrix.msc3401.call.member', 'org.matrix.msc4143.rtc.member'] as const
+
+function normalizeVoiceUserId(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const value = raw.trim()
+  if (!value) return null
+
+  // Extract first candidate user id from noisy call-member payloads.
+  const candidateMatch = value.startsWith('@')
+    ? value.match(/^@[^|,\s]+:[^|,\s]+/)
+    : value.match(/@[^|,\s]+:[^|,\s]+/)
+  const candidate = candidateMatch?.[0]
+  if (!candidate) return null
+
+  const colon = candidate.indexOf(':')
+  if (colon <= 1) return null
+  const localpart = candidate.slice(0, colon)
+  let serverPart = candidate.slice(colon + 1)
+  if (!localpart || !serverPart) return null
+
+  // Call membership keys often append "_<opaque>.m.call" to the server part.
+  // Keep only the canonical homeserver host (plus optional port).
+  const underscore = serverPart.indexOf('_')
+  if (underscore !== -1) serverPart = serverPart.slice(0, underscore)
+  const pipe = serverPart.indexOf('|')
+  if (pipe !== -1) serverPart = serverPart.slice(0, pipe)
+
+  // Trim trailing punctuation that may leak from embedded strings.
+  serverPart = serverPart.replace(/[)\],;]+$/g, '').trim()
+  if (!serverPart) return null
+
+  return `${localpart}:${serverPart}`
+}
+
+function collectVoiceParticipantIds(room: MatrixRoom): string[] {
+  const ids = new Set<string>()
+
+  for (const eventType of CALL_MEMBER_EVENT_TYPES) {
+    const events = room.currentState.getStateEvents(eventType) || []
+    for (const ev of events) {
+      if (ev.isRedacted?.()) continue
+
+      const fromStateKey = normalizeVoiceUserId(ev.getStateKey())
+      if (fromStateKey) ids.add(fromStateKey)
+
+      const content = (ev.getContent() as Record<string, unknown>) || {}
+      const fromSender = normalizeVoiceUserId(content.sender)
+      if (fromSender) ids.add(fromSender)
+      const fromUserId = normalizeVoiceUserId(content.user_id)
+      if (fromUserId) ids.add(fromUserId)
+
+      if (Array.isArray(content.memberships)) {
+        for (const membership of content.memberships) {
+          if (!membership || typeof membership !== 'object') continue
+          const item = membership as Record<string, unknown>
+          const fromMembershipSender = normalizeVoiceUserId(item.sender)
+          if (fromMembershipSender) ids.add(fromMembershipSender)
+          const fromMembershipUserId = normalizeVoiceUserId(item.user_id)
+          if (fromMembershipUserId) ids.add(fromMembershipUserId)
+        }
+      }
+    }
+  }
+
+  return Array.from(ids)
+}
+
+function getVoiceParticipants(
+  room: MatrixRoom,
+  baseUrl: string,
+): Array<{ userId: string; displayName: string; avatarUrl: string | null }> {
+  const userIds = collectVoiceParticipantIds(room)
+  if (userIds.length === 0) return []
+
+  const participants = userIds.map((userId) => {
+    const member = room.getMember(userId)
+    const memberStateResult = room.currentState.getStateEvents('m.room.member', userId)
+    const memberStateEvent = Array.isArray(memberStateResult) ? memberStateResult[0] : memberStateResult
+    const memberStateContent = (memberStateEvent?.getContent() as Record<string, unknown> | undefined) || {}
+    let avatarUrl: string | null = null
+    try {
+      avatarUrl = member?.getAvatarUrl(baseUrl, 24, 24, 'crop', false, false, true) || null
+      if (!avatarUrl && typeof memberStateContent.avatar_url === 'string' && client) {
+        avatarUrl = client.mxcUrlToHttp(memberStateContent.avatar_url, 24, 24, 'crop', false, false, true) || null
+      }
+      if (!avatarUrl && client) {
+        const userObj = client.getUser(userId) as { avatarUrl?: string | null } | null
+        if (typeof userObj?.avatarUrl === 'string' && userObj.avatarUrl) {
+          avatarUrl = client.mxcUrlToHttp(userObj.avatarUrl, 24, 24, 'crop', false, false, true) || null
+        }
+      }
+    } catch {
+      // ignore
+    }
+    if (avatarUrl) {
+      avatarUrl = getMediaUrlWithAccessToken(avatarUrl) || avatarUrl
+    }
+    const fallbackLocalpart = userId.replace(/^@/, '').split(':')[0] || userId
+    const displayName =
+      member?.name ||
+      (typeof memberStateContent.displayname === 'string' ? memberStateContent.displayname : '') ||
+      fallbackLocalpart
+    return {
+      userId,
+      displayName,
+      avatarUrl,
+    }
+  })
+
+  const sorted = participants.sort((a, b) => a.displayName.localeCompare(b.displayName, 'fr', { sensitivity: 'base' }))
+  if (isVoiceDebugEnabled()) {
+    console.debug('[VoiceDebug] getVoiceParticipants', {
+      roomId: room.roomId,
+      participantCount: sorted.length,
+      participants: sorted.map((p) => ({
+        userId: p.userId,
+        displayName: p.displayName,
+        hasAvatar: !!p.avatarUrl,
+        avatarUrl: p.avatarUrl,
+      })),
+    })
+  }
+  return sorted
+}
+
+export async function getUserProfileBasics(
+  userId: string,
+  size = 24,
+): Promise<{ displayName: string | null; avatarUrl: string | null }> {
+  const cached = userProfileCache.get(userId)
+  if (cached) return cached
+  if (!client) return { displayName: null, avatarUrl: null }
+
+  let displayName: string | null = null
+  let avatarUrl: string | null = null
+
+  const userObj = client.getUser(userId) as { displayName?: string; avatarUrl?: string | null } | null
+  if (typeof userObj?.displayName === 'string' && userObj.displayName.trim()) {
+    displayName = userObj.displayName.trim()
+  }
+  if (typeof userObj?.avatarUrl === 'string' && userObj.avatarUrl) {
+    avatarUrl = client.mxcUrlToHttp(userObj.avatarUrl, size, size, 'crop', false, false, true) || null
+  }
+
+  if (!displayName || !avatarUrl) {
+    for (const room of client.getRooms()) {
+      const member = room.getMember(userId)
+      if (!member) continue
+      if (!displayName && member.name) displayName = member.name
+      if (!avatarUrl) {
+        try {
+          avatarUrl = member.getAvatarUrl(client.baseUrl, size, size, 'crop', false, false, true) || null
+        } catch {
+          // ignore
+        }
+      }
+      if (displayName && avatarUrl) break
+    }
+  }
+
+  if (!displayName || !avatarUrl) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const profile = await (client as any).getProfileInfo(userId)
+      if (!displayName && typeof profile?.displayname === 'string' && profile.displayname.trim()) {
+        displayName = profile.displayname.trim()
+      }
+      if (!avatarUrl && typeof profile?.avatar_url === 'string' && profile.avatar_url) {
+        avatarUrl = client.mxcUrlToHttp(profile.avatar_url, size, size, 'crop', false, false, true) || null
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (avatarUrl) {
+    avatarUrl = getMediaUrlWithAccessToken(avatarUrl) || avatarUrl
+  }
+
+  const result = { displayName, avatarUrl }
+  userProfileCache.set(userId, result)
+  return result
+}
+
+export async function getRoomMemberProfileBasics(
+  roomId: string,
+  userId: string,
+  size = 24,
+): Promise<{ displayName: string | null; avatarUrl: string | null }> {
+  if (!client) return { displayName: null, avatarUrl: null }
+
+  const fromCache = roomJoinedMembersCache.get(roomId)?.get(userId)
+  if (fromCache) {
+    return {
+      displayName: fromCache.displayName,
+      avatarUrl: fromCache.avatarMxc
+        ? client.mxcUrlToHttp(fromCache.avatarMxc, size, size, 'crop', false, false, true) || null
+        : null,
+    }
+  }
+
+  try {
+    const resp = await client.getJoinedRoomMembers(roomId)
+    const roomMap = new Map<string, { displayName: string | null; avatarMxc: string | null }>()
+    for (const [joinedUserId, info] of Object.entries(resp.joined || {})) {
+      const joined = info as { display_name?: string; avatar_url?: string }
+      roomMap.set(joinedUserId, {
+        displayName: typeof joined.display_name === 'string' ? joined.display_name : null,
+        avatarMxc: typeof joined.avatar_url === 'string' ? joined.avatar_url : null,
+      })
+    }
+    roomJoinedMembersCache.set(roomId, roomMap)
+  } catch {
+    // ignore
+  }
+
+  const fallback = roomJoinedMembersCache.get(roomId)?.get(userId)
+  if (fallback) {
+    return {
+      displayName: fallback.displayName,
+      avatarUrl: fallback.avatarMxc
+        ? client.mxcUrlToHttp(fallback.avatarMxc, size, size, 'crop', false, false, true) || null
+        : null,
+    }
+  }
+
+  return getUserProfileBasics(userId, size)
 }
 
 function encryptedFallbackMessage(event: MatrixEvent, roomId: string): MessageEvent | null {

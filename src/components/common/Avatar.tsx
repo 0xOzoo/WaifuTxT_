@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getClient } from '../../lib/matrix'
+import { getClient, getMediaUrlWithAccessToken } from '../../lib/matrix'
 
 interface AvatarProps {
   src: string | null
@@ -28,21 +28,32 @@ function hashColor(name: string): string {
   return colors[Math.abs(hash) % colors.length]
 }
 
+function isVoiceDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem('waifutxt_debug_voice') === '1'
+  } catch {
+    return false
+  }
+}
+
 export function Avatar({ src, name, size = 40, className = '', status, shape = 'circle' }: AvatarProps) {
   const initials = getInitials(name)
   const bgColor = hashColor(name)
-  const [displaySrc, setDisplaySrc] = useState<string | null>(src)
+  const [displaySrc, setDisplaySrc] = useState<string | null>(() => (src ? (getMediaUrlWithAccessToken(src) || src) : null))
   const [showFallback, setShowFallback] = useState(!src)
   const [triedAuthFallback, setTriedAuthFallback] = useState(false)
+  const [triedDownloadFallback, setTriedDownloadFallback] = useState(false)
   const [morphClass, setMorphClass] = useState('')
   const blobUrlRef = useRef<string | null>(null)
   const prevShapeRef = useRef(shape)
   const avatarRadiusClass = shape === 'rounded' ? 'rounded-xl' : 'rounded-full'
 
   useEffect(() => {
-    setDisplaySrc(src)
+    setDisplaySrc(src ? (getMediaUrlWithAccessToken(src) || src) : null)
     setShowFallback(!src)
     setTriedAuthFallback(false)
+    setTriedDownloadFallback(false)
   }, [src])
 
   useEffect(() => {
@@ -85,6 +96,39 @@ export function Avatar({ src, name, size = 40, className = '', status, shape = '
   }
 
   const handleImageError = async () => {
+    if (isVoiceDebugEnabled()) {
+      console.debug('[VoiceDebug] Avatar load error', {
+        name,
+        src,
+        displaySrc,
+        triedDownloadFallback,
+        triedAuthFallback,
+      })
+    }
+    if (!triedDownloadFallback && displaySrc && displaySrc.includes('/media/thumbnail/')) {
+      let downloadSrc = displaySrc
+      try {
+        const u = new URL(displaySrc)
+        u.pathname = u.pathname.replace('/media/thumbnail/', '/media/download/')
+        const token = u.searchParams.get('access_token')
+        u.search = ''
+        if (token) u.searchParams.set('access_token', token)
+        downloadSrc = u.toString()
+      } catch {
+        const parts = displaySrc.split('?')
+        const base = parts[0].replace('/media/thumbnail/', '/media/download/')
+        const accessTokenPart = (parts[1] || '')
+          .split('&')
+          .find((p) => p.startsWith('access_token='))
+        downloadSrc = accessTokenPart ? `${base}?${accessTokenPart}` : base
+      }
+      setTriedDownloadFallback(true)
+      setDisplaySrc(downloadSrc)
+      if (isVoiceDebugEnabled()) {
+        console.debug('[VoiceDebug] Avatar fallback thumbnail->download', { name, from: displaySrc, to: downloadSrc })
+      }
+      return
+    }
     if (triedAuthFallback) {
       setShowFallback(true)
       return

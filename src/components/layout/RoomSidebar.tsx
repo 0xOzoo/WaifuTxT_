@@ -3,7 +3,7 @@ import { useRoomStore } from '../../stores/roomStore'
 import { Avatar } from '../common/Avatar'
 import { useAuthStore } from '../../stores/authStore'
 import { useUiStore } from '../../stores/uiStore'
-import { getOwnAvatarUrl, setOwnPresence } from '../../lib/matrix'
+import { getOwnAvatarUrl, getRoomMemberProfileBasics, getUserProfileBasics, loadRoomMembers, setOwnPresence } from '../../lib/matrix'
 import { getWaifuById } from '../../lib/waifu'
 import type { PresenceValue } from '../../stores/uiStore'
 
@@ -22,6 +22,15 @@ function isVoiceRoom(room: { roomType?: string; name: string; topic: string }): 
   return /\b(vocal|voice|audio)\b/.test(label)
 }
 
+function isVoiceDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem('waifutxt_debug_voice') === '1'
+  } catch {
+    return false
+  }
+}
+
 export function RoomSidebar() {
   const [search, setSearch] = useState('')
   const [isMuted, setIsMuted] = useState(false)
@@ -37,6 +46,7 @@ export function RoomSidebar() {
   const activeSpaceId = useRoomStore((s) => s.activeSpaceId)
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
+  const membersByRoom = useRoomStore((s) => s.members)
   const updatePresence = useRoomStore((s) => s.updatePresence)
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
@@ -56,6 +66,8 @@ export function RoomSidebar() {
   }, [roomSearchFocusBump])
 
   const [ownAvatarUrl, setOwnAvatarUrl] = useState<string | null>(null)
+  const [voiceProfileMap, setVoiceProfileMap] = useState<Record<string, { displayName: string | null; avatarUrl: string | null }>>({})
+  const loadedVoiceMembersRef = useRef(new Set<string>())
   useEffect(() => {
     const url = getOwnAvatarUrl()
     if (url) setOwnAvatarUrl(url)
@@ -106,6 +118,86 @@ export function RoomSidebar() {
     ? displayRooms.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
     : displayRooms
 
+  useEffect(() => {
+    const voiceUsers = new Map<string, string>()
+    for (const room of filtered) {
+      if (!isVoiceRoom(room)) continue
+      if ((room.voiceParticipants || []).length > 0 && !membersByRoom.get(room.roomId) && !loadedVoiceMembersRef.current.has(room.roomId)) {
+        loadedVoiceMembersRef.current.add(room.roomId)
+        loadRoomMembers(room.roomId).catch(() => {
+          loadedVoiceMembersRef.current.delete(room.roomId)
+        })
+      }
+      for (const participant of room.voiceParticipants || []) {
+        if (!participant.userId) continue
+        if (!participant.avatarUrl) {
+          voiceUsers.set(participant.userId, room.roomId)
+        }
+      }
+    }
+    const toFetch = Array.from(voiceUsers.entries()).filter(([userId]) => !(userId in voiceProfileMap))
+    if (toFetch.length === 0) return
+
+    let cancelled = false
+    Promise.all(
+      toFetch.map(async ([userId, roomId]) => ({
+        userId,
+        profile: await (async () => {
+          const roomProfile = await getRoomMemberProfileBasics(roomId, userId, 24)
+          if (roomProfile.avatarUrl) return roomProfile
+          return getUserProfileBasics(userId, 24)
+        })(),
+      })),
+    )
+      .then((items) => {
+        if (cancelled) return
+        setVoiceProfileMap((prev) => {
+          const next = { ...prev }
+          for (const item of items) next[item.userId] = item.profile
+          return next
+        })
+      })
+      .catch(() => {
+        // ignore
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [filtered, voiceProfileMap, membersByRoom])
+
+  useEffect(() => {
+    if (!isVoiceDebugEnabled()) return
+    const snapshot = filtered
+      .filter((room) => isVoiceRoom(room) && (room.voiceParticipants || []).length > 0)
+      .map((room) => {
+        const roomMembers = membersByRoom.get(room.roomId) || []
+        return {
+          roomId: room.roomId,
+          roomName: room.name,
+          participants: (room.voiceParticipants || []).map((p) => {
+            const member = roomMembers.find((m) => m.userId === p.userId)
+            const fallback = voiceProfileMap[p.userId]
+            const resolvedAvatar = member?.avatarUrl || p.avatarUrl || fallback?.avatarUrl || null
+            const source = member?.avatarUrl
+              ? 'membersStore'
+              : p.avatarUrl
+                ? 'voiceParticipants'
+                : fallback?.avatarUrl
+                  ? 'voiceProfileMap'
+                  : 'none'
+            return {
+              userId: p.userId,
+              displayName: member?.displayName || fallback?.displayName || p.displayName,
+              avatarSource: source,
+              avatarUrl: resolvedAvatar,
+            }
+          }),
+        }
+      })
+    console.debug('[VoiceDebug] RoomSidebar snapshot', snapshot)
+  }, [filtered, membersByRoom, voiceProfileMap])
+
   const spaceName = activeSpaceId ? rooms.get(activeSpaceId)?.name || 'Space' : 'Messages'
 
   return (
@@ -127,47 +219,74 @@ export function RoomSidebar() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
-        {filtered.map((room) => (
-          <button
-            key={room.roomId}
-            onClick={() => setActiveRoom(room.roomId)}
-            className={`w-full flex items-center px-2 py-1.5 rounded-md transition-colors text-left cursor-pointer group ${
-              activeRoomId === room.roomId
-                ? 'bg-bg-hover text-text-primary'
-                : room.unreadCount > 0
-                  ? 'text-text-primary hover:bg-bg-hover/50'
-                  : 'text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary'
-            }`}
-          >
-            <span className="mr-1.5 text-text-muted/90 shrink-0" aria-hidden>
-              {isVoiceRoom(room) ? (
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 11-14 0m7 7v3" />
-                </svg>
-              ) : (
-                <span className="text-base leading-none">#</span>
-              )}
-            </span>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-1.5">
-                <span className={`text-sm truncate ${room.unreadCount > 0 && activeRoomId !== room.roomId ? 'font-semibold' : 'font-medium'}`}>
-                  {room.name}
+        {filtered.map((room) => {
+          const isVoice = isVoiceRoom(room)
+          const participants = room.voiceParticipants || []
+          const roomMembers = membersByRoom.get(room.roomId) || []
+          return (
+            <div key={room.roomId} className="space-y-1">
+              <button
+                onClick={() => setActiveRoom(room.roomId)}
+                className={`w-full flex items-center px-2 py-1.5 rounded-md transition-colors text-left cursor-pointer group ${
+                  activeRoomId === room.roomId
+                    ? 'bg-bg-hover text-text-primary'
+                    : room.unreadCount > 0
+                      ? 'text-text-primary hover:bg-bg-hover/50'
+                      : 'text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary'
+                }`}
+              >
+                <span className="mr-1.5 text-text-muted/90 shrink-0" aria-hidden>
+                  {isVoice ? (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 14a3 3 0 003-3V7a3 3 0 10-6 0v4a3 3 0 003 3z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 11-14 0m7 7v3" />
+                    </svg>
+                  ) : (
+                    <span className="text-base leading-none">#</span>
+                  )}
                 </span>
-                {showMentionBadge && activeRoomId !== room.roomId && room.mentionCount > 0 ? (
-                  <span className="shrink-0 flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-accent-pink">
-                    {room.mentionCount > 99 ? '99+' : room.mentionCount}
-                  </span>
-                ) : showUnreadDot && activeRoomId !== room.roomId && room.unreadCount > 0 ? (
-                  <span className="shrink-0 w-2 h-2 rounded-full bg-accent-pink" />
-                ) : null}
-              </div>
-              {showRoomMessagePreview && room.lastMessage && (
-                <p className="text-xs text-text-muted truncate">{room.lastMessage}</p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className={`text-sm truncate ${room.unreadCount > 0 && activeRoomId !== room.roomId ? 'font-semibold' : 'font-medium'}`}>
+                      {room.name}
+                    </span>
+                    {showMentionBadge && activeRoomId !== room.roomId && room.mentionCount > 0 ? (
+                      <span className="shrink-0 flex items-center justify-center rounded-full min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-accent-pink">
+                        {room.mentionCount > 99 ? '99+' : room.mentionCount}
+                      </span>
+                    ) : showUnreadDot && activeRoomId !== room.roomId && room.unreadCount > 0 ? (
+                      <span className="shrink-0 w-2 h-2 rounded-full bg-accent-pink" />
+                    ) : null}
+                  </div>
+                  {showRoomMessagePreview && room.lastMessage && (
+                    <p className="text-xs text-text-muted truncate">{room.lastMessage}</p>
+                  )}
+                </div>
+              </button>
+
+              {isVoice && participants.length > 0 && (
+                <div className="pl-6 pr-2 pb-1 space-y-1">
+                  {participants.map((participant) => {
+                    const matchedMember = roomMembers.find((m) => m.userId === participant.userId)
+                    const displayName = matchedMember?.displayName || voiceProfileMap[participant.userId]?.displayName || participant.displayName
+                    const avatarUrl = matchedMember?.avatarUrl || participant.avatarUrl || voiceProfileMap[participant.userId]?.avatarUrl || null
+                    return (
+                      <button
+                        key={`${room.roomId}:${participant.userId}`}
+                        onClick={() => setActiveRoom(room.roomId)}
+                        className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left text-text-muted hover:text-text-primary hover:bg-bg-hover/40 transition-colors cursor-pointer"
+                        title={participant.userId}
+                      >
+                        <Avatar src={avatarUrl} name={displayName} size={18} />
+                        <span className="text-xs truncate">{displayName}</span>
+                      </button>
+                    )
+                  })}
+                </div>
               )}
             </div>
-          </button>
-        ))}
+          )
+        })}
 
         {filtered.length === 0 && (
           <div className="text-center text-text-muted text-xs py-8">Aucun salon trouvé</div>
