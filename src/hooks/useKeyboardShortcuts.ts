@@ -87,7 +87,12 @@ export function useKeyboardShortcuts() {
           const messages = useMessageStore.getState().getMessages(activeRoomId)
           const lastEditable = [...messages]
             .reverse()
-            .find((m) => m.sender === myUserId && m.type === 'm.text' && !m.content.startsWith('🔒'))
+            .find((m) =>
+              m.sender === myUserId &&
+              m.type === 'm.text' &&
+              m.eventId.startsWith('$') &&
+              !m.content.startsWith('🔒'),
+            )
           if (lastEditable) {
             e.preventDefault()
             useUiStore.getState().setEditTargetEventId(lastEditable.eventId)
