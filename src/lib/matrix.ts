@@ -19,6 +19,11 @@ const decryptPromiseCache = new Map<string, Promise<string>>()
 const userProfileCache = new Map<string, { displayName: string | null; avatarUrl: string | null }>()
 const roomJoinedMembersCache = new Map<string, Map<string, { displayName: string | null; avatarMxc: string | null }>>()
 
+const OWN_STATUS_MSG_STORAGE_KEY = 'waifutxt_status_msg'
+export const MAX_PRESENCE_STATUS_MSG_LEN = 200
+
+let ownStatusStorageListenerBound = false
+
 function isVoiceDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false
   try {
@@ -188,6 +193,17 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     }
   })
 
+  if (typeof window !== 'undefined' && !ownStatusStorageListenerBound) {
+    ownStatusStorageListenerBound = true
+    window.addEventListener('storage', (e: StorageEvent) => {
+      if (e.key !== OWN_STATUS_MSG_STORAGE_KEY || !client) return
+      const uid = client.getUserId()
+      if (!uid) return
+      const msg = getStoredOwnStatusMessage().trim()
+      useRoomStore.getState().setStatusMessage(uid, msg || null)
+    })
+  }
+
   client.on(matrixSdk.RoomEvent.Timeline, (event: MatrixEvent, room: import('matrix-js-sdk').Room | undefined) => {
     try {
       if (!room) return
@@ -295,14 +311,23 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
   // Real-time presence updates emitted by the SDK on User objects.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client.on('User.presence' as any, (_event: unknown, user: any) => {
-    applyPresence(user?.userId, user?.presence)
+    const content = user?.events?.presence?.getContent?.() as Record<string, unknown> | undefined
+    const sm =
+      content && Object.prototype.hasOwnProperty.call(content, 'status_msg')
+        ? String((content.status_msg as string | undefined) ?? '')
+        : undefined
+    applyPresence(user?.userId, user?.presence, sm)
   })
 
   // Fallback: raw m.presence events arriving in the sync stream.
   // Covers homeservers where the SDK reEmitter is not wired for User events.
   client.on(matrixSdk.ClientEvent.Event, (event: MatrixEvent) => {
     if (event.getType() !== 'm.presence') return
-    applyPresence(event.getSender(), event.getContent()?.presence)
+    const c = event.getContent() as Record<string, unknown>
+    const sm = Object.prototype.hasOwnProperty.call(c, 'status_msg')
+      ? String((c.status_msg as string | undefined) ?? '')
+      : undefined
+    applyPresence(event.getSender(), c.presence as string | undefined, sm)
   })
 
   client.on(matrixSdk.ClientEvent.Event, (event: MatrixEvent) => {
@@ -1591,6 +1616,27 @@ export async function loadRoomMembers(roomId: string): Promise<void> {
     if (!(m.userId in store.presenceMap)) {
       store.updatePresence(m.userId, m.presence)
     }
+    if (!(m.userId in store.statusMessageMap)) {
+      const ownId = client!.getUserId()
+      let seeded = false
+      if (ownId === m.userId) {
+        const stored = getStoredOwnStatusMessage().trim()
+        if (stored) {
+          store.setStatusMessage(m.userId, stored)
+          seeded = true
+        }
+      }
+      if (!seeded) {
+        const u = client!.getUser(m.userId) as import('matrix-js-sdk').User | null
+        const content = u?.events?.presence?.getContent?.() as Record<string, unknown> | undefined
+        if (content && Object.prototype.hasOwnProperty.call(content, 'status_msg')) {
+          const raw = String((content.status_msg as string | undefined) ?? '').trim()
+          if (raw) store.setStatusMessage(m.userId, raw)
+        } else if (u && typeof u.presenceStatusMsg === 'string' && u.presenceStatusMsg.trim()) {
+          store.setStatusMessage(m.userId, u.presenceStatusMsg.trim())
+        }
+      }
+    }
   }
   store.setMembers(roomId, members)
 }
@@ -1681,16 +1727,36 @@ export interface DeviceInfo {
   isCurrentDevice: boolean
 }
 
-function applyPresence(userId: string | undefined | null, raw: string | undefined | null): void {
+function applyPresence(
+  userId: string | undefined | null,
+  raw: string | undefined | null,
+  statusMsgUpdate?: string,
+): void {
   if (!userId) return
   const presence = raw === 'online' ? 'online' : raw === 'unavailable' ? 'unavailable' : 'offline'
   useRoomStore.getState().updatePresence(userId, presence)
+  if (statusMsgUpdate !== undefined) {
+    let trimmed = statusMsgUpdate.trim()
+    // Pour soi : la phrase enregistrée dans l'app (localStorage) prime sur m.presence —
+    // sinon un autre client (ex. Element + Spotify) écrase avec "listening", etc.
+    // Si l'utilisateur a vidé la phrase ici, on retombe sur la valeur serveur.
+    if (client?.getUserId() === userId) {
+      const stored = getStoredOwnStatusMessage().trim()
+      trimmed = stored || trimmed
+    }
+    useRoomStore.getState().setStatusMessage(userId, trimmed || null)
+  }
 }
 
 function seedPresenceFromUsers(): void {
   if (!client) return
   for (const user of client.getUsers()) {
-    if (user.presence) applyPresence(user.userId, user.presence)
+    const content = user.events?.presence?.getContent?.() as Record<string, unknown> | undefined
+    const sm =
+      content && Object.prototype.hasOwnProperty.call(content, 'status_msg')
+        ? String((content.status_msg as string | undefined) ?? '')
+        : undefined
+    applyPresence(user.userId, user.presence, sm)
   }
 }
 
@@ -1704,20 +1770,90 @@ export function getOwnPresence(): 'online' | 'unavailable' | 'offline' {
   return 'offline'
 }
 
+export function getStoredOwnStatusMessage(): string {
+  try {
+    return localStorage.getItem(OWN_STATUS_MSG_STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function getLocalPresencePreference(): 'online' | 'unavailable' | 'offline' {
+  try {
+    const stored = localStorage.getItem('waifutxt_presence')
+    if (stored === 'online' || stored === 'unavailable' || stored === 'offline') return stored
+  } catch {
+    /* ignore */
+  }
+  return 'online'
+}
+
+function isPresenceDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem('waifutxt_debug_presence') === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Réapplique la phrase Paramètres → store (retour onglet, etc.). */
+export function reapplyStoredOwnStatusToStore(): void {
+  if (!client) return
+  const uid = client.getUserId()
+  if (!uid) return
+  const stored = getStoredOwnStatusMessage().trim()
+  if (stored) useRoomStore.getState().setStatusMessage(uid, stored)
+}
+
 export async function setOwnPresence(presence: 'online' | 'unavailable' | 'offline'): Promise<void> {
   if (!client) return
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (client as any).sendPresence({ presence })
+  const status_msg = getStoredOwnStatusMessage().slice(0, MAX_PRESENCE_STATUS_MSG_LEN)
+  if (isPresenceDebugEnabled()) {
+    console.info('[WaifuTxT presence] setOwnPresence → PUT …/presence/{userId}/status', {
+      presence,
+      status_msg,
+    })
+  }
+  await client.setPresence({ presence, status_msg })
+}
+
+/**
+ * Envoie la phrase au homeserver via PUT /presence/{userId}/status (matrix-js-sdk : client.setPresence).
+ * Le corps JSON contient toujours `presence` + `status_msg` (Spec Matrix).
+ */
+export async function setOwnStatusMessage(text: string): Promise<void> {
+  const c = await ensureClientReady()
+  const userId = c.getUserId()
+  if (!userId) throw new Error('Non connecté')
+  const trimmed = text.trim().slice(0, MAX_PRESENCE_STATUS_MSG_LEN)
+  try {
+    localStorage.setItem(OWN_STATUS_MSG_STORAGE_KEY, trimmed)
+  } catch {
+    console.warn('[WaifuTxT] Échec localStorage pour waifutxt_status_msg — la phrase ne sera peut‑être pas mémorisée localement')
+  }
+  useRoomStore.getState().setStatusMessage(userId, trimmed || null)
+  const presence = getLocalPresencePreference()
+  if (isPresenceDebugEnabled()) {
+    console.info('[WaifuTxT presence] setOwnStatusMessage → client.setPresence', {
+      presence,
+      status_msg: trimmed,
+      userId,
+    })
+  }
+  await c.setPresence({ presence, status_msg: trimmed })
 }
 
 export async function initOwnPresence(): Promise<void> {
-  const stored = localStorage.getItem('waifutxt_presence')
-  const presence: 'online' | 'unavailable' | 'offline' =
-    stored === 'online' || stored === 'unavailable' || stored === 'offline' ? stored : 'online'
+  const presence = getLocalPresencePreference()
   // Optimistically push into presenceMap so the UI reflects it immediately,
   // before the server echoes the User.presence event back.
   const userId = client?.getUserId()
-  if (userId) useRoomStore.getState().updatePresence(userId, presence)
+  if (userId) {
+    useRoomStore.getState().updatePresence(userId, presence)
+    const msg = getStoredOwnStatusMessage().trim()
+    useRoomStore.getState().setStatusMessage(userId, msg || null)
+  }
   await setOwnPresence(presence)
 }
 

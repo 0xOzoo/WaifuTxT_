@@ -6,6 +6,7 @@ import { useUiStore } from '../../stores/uiStore'
 import {
   getOwnAvatarUrl,
   getRoomMemberProfileBasics,
+  getStoredOwnStatusMessage,
   getUserProfileBasics,
   joinRoom,
   declineInvite,
@@ -206,6 +207,7 @@ export function RoomSidebar() {
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
   const membersByRoom = useRoomStore((s) => s.members)
   const updatePresence = useRoomStore((s) => s.updatePresence)
+  const statusMessageMap = useRoomStore((s) => s.statusMessageMap)
   const session = useAuthStore((s) => s.session)
   const setSettingsModal = useUiStore((s) => s.setSettingsModal)
   const showRoomMessagePreview = useUiStore((s) => s.showRoomMessagePreview)
@@ -215,6 +217,7 @@ export function RoomSidebar() {
   const selectedWaifuId = useUiStore((s) => s.selectedWaifuId)
   const roomSearchFocusBump = useUiStore((s) => s.roomSearchFocusBump)
   const myUserId = session?.userId ?? null
+  const ownStatusPhrase = (myUserId ? statusMessageMap[myUserId]?.trim() : '') || getStoredOwnStatusMessage().trim()
 
   useEffect(() => {
     if (roomSearchFocusBump > 0) { searchInputRef.current?.focus(); searchInputRef.current?.select() }
@@ -651,10 +654,12 @@ export function RoomSidebar() {
         )}
       </div>
 
-      {/* User bar */}
-      <div className="relative -left-[72px] w-[calc(100%+72px)] h-14 pl-[80px] pr-2 flex items-center gap-2 bg-bg-tertiary/95 border-t border-border">
-        {showPresenceMenu && (
-          <div ref={presenceMenuRef} className="absolute bottom-16 left-[80px] w-44 bg-bg-tertiary border border-border rounded-lg shadow-xl p-1 z-50">
+      <div className="relative -left-[72px] w-[calc(100%+72px)] min-h-[3.25rem] py-2 pl-[80px] pr-2 flex items-center justify-between gap-2 bg-bg-tertiary/95 border-t border-border">
+         {showPresenceMenu && (
+          <div
+            ref={presenceMenuRef}
+            className="absolute bottom-16 left-[80px] w-44 bg-bg-tertiary border border-border rounded-lg shadow-xl p-1 z-50"
+          >
             {PRESENCE_OPTIONS.map(({ value, label, color }) => (
               <button key={value} onClick={() => handleSetPresence(value)}
                 className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-sm text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors cursor-pointer">
@@ -670,24 +675,46 @@ export function RoomSidebar() {
           </div>
         )}
 
-        <button onClick={() => setShowPresenceMenu((v) => !v)}
-          className="flex items-center gap-2 min-w-0 flex-1 px-1.5 py-1 rounded-md hover:bg-bg-hover/70 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-pink"
-          title="Changer de statut">
-          <Avatar src={displayedOwnAvatarUrl} name={session?.userId || '?'} size={32} status={ownPresence} />
-          <div className="min-w-0 text-left">
+        <button
+          onClick={() => setShowPresenceMenu((v) => !v)}
+          className="flex min-w-0 flex-1 basis-0 items-center justify-start gap-2 overflow-x-hidden rounded-md px-1.5 py-0.5 text-left hover:bg-bg-hover/70 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-pink"
+          title="Changer de statut"
+          aria-label="Changer de statut"
+        >
+          <Avatar
+            className="shrink-0"
+            src={displayedOwnAvatarUrl}
+            name={session?.userId || '?'}
+            size={32}
+            status={ownPresence}
+          />
+          <div className="min-w-0 flex-1 overflow-hidden text-left">
             <div className="text-sm font-semibold truncate text-text-primary leading-tight">
               {session?.userId?.split(':')[0]?.replace('@', '') || ''}
             </div>
-            <div className="text-[11px] text-text-muted truncate leading-tight">
-              {PRESENCE_OPTIONS.find((o) => o.value === ownPresence)?.label ?? 'Hors-ligne'}
+            <div
+              className={`text-[11px] truncate leading-tight ${
+                ownStatusPhrase ? 'font-semibold text-text-secondary' : 'text-text-muted'
+              }`}
+              title={ownStatusPhrase || undefined}
+            >
+              {ownStatusPhrase ||
+                (PRESENCE_OPTIONS.find((o) => o.value === ownPresence)?.label ?? 'Hors-ligne')}
             </div>
           </div>
         </button>
 
-        <div className="flex items-center gap-0.5">
-          <button onClick={() => setIsMuted((v) => !v)}
-            className={`p-1.5 rounded-md transition-colors cursor-pointer ${isMuted ? 'text-danger bg-danger/10 hover:bg-danger/20' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'}`}
-            title={isMuted ? 'Activer le micro' : 'Couper le micro'}>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            onClick={() => setIsMuted((v) => !v)}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+              isMuted
+                ? 'text-danger bg-danger/10 hover:bg-danger/20'
+                : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'
+            }`}
+            title={isMuted ? 'Activer le micro' : 'Couper le micro'}
+            aria-label={isMuted ? 'Activer le micro' : 'Couper le micro'}
+          >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               {isMuted
                 ? <><path strokeLinecap="round" strokeLinejoin="round" d="M9 9v3a3 3 0 006 0V9m-3 8v3m-4-3a7 7 0 008 0M3 3l18 18" /></>

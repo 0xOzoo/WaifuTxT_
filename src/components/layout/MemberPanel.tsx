@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react'
+import { getStoredOwnStatusMessage } from '../../lib/matrix'
+import { useAuthStore } from '../../stores/authStore'
 import { useRoomStore } from '../../stores/roomStore'
 import { Avatar } from '../common/Avatar'
 import { UserProfileCard } from '../common/UserProfileCard'
@@ -12,9 +14,11 @@ function presenceOrder(p: PresenceValue | undefined): number {
 }
 
 export function MemberPanel() {
+  const myUserId = useAuthStore((s) => s.session?.userId ?? null)
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
   const members = useRoomStore((s) => (activeRoomId ? s.members.get(activeRoomId) : undefined))
   const presenceMap = useRoomStore((s) => s.presenceMap)
+  const statusMessageMap = useRoomStore((s) => s.statusMessageMap)
 
   const [openCard, setOpenCard] = useState<RoomMember | null>(null)
   const anchorRef = useRef<HTMLElement | null>(null)
@@ -52,6 +56,9 @@ export function MemberPanel() {
         {sorted.map((member) => {
           const status = getStatus(member)
           const isOffline = status === 'offline'
+          const statusPhrase =
+            statusMessageMap[member.userId]?.trim() ||
+            (member.userId === myUserId ? getStoredOwnStatusMessage().trim() : '')
           return (
             <div
               key={member.userId}
@@ -64,8 +71,16 @@ export function MemberPanel() {
                 size={32}
                 status={status}
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="text-sm truncate text-text-primary">{member.displayName}</div>
+                {statusPhrase ? (
+                  <div
+                    className="text-xs font-semibold text-text-secondary truncate mt-0.5 leading-snug"
+                    title={statusPhrase}
+                  >
+                    {statusPhrase}
+                  </div>
+                ) : null}
               </div>
             </div>
           )
@@ -93,8 +108,13 @@ export function MemberPanel() {
           displayName={openCard.displayName}
           userId={openCard.userId}
           avatarUrl={openCard.avatarUrl}
-          presence={openCard.presence}
+          presence={getStatus(openCard)}
           powerLevel={openCard.powerLevel}
+          statusMessage={
+            openCard.userId === myUserId
+              ? statusMessageMap[openCard.userId]?.trim() || getStoredOwnStatusMessage().trim() || null
+              : statusMessageMap[openCard.userId]
+          }
         />
       )}
     </div>
