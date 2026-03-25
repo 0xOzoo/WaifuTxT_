@@ -8,6 +8,7 @@ import type { DeviceInfo } from '../../lib/matrix'
 import { startSelfVerification } from '../../lib/verification'
 import { AccentColorPicker } from '../settings/AccentColorPicker'
 import { ThemePicker } from '../settings/ThemePicker'
+import { ProfileAvatarUpload } from '../settings/ProfileAvatarUpload'
 import { WAIFU_OPTIONS, getWaifuById } from '../../lib/waifu'
 
 const SETTINGS_SECTIONS = [
@@ -413,26 +414,24 @@ export function SettingsModal() {
   const setTypingIndicatorStyle = useUiStore((s) => s.setTypingIndicatorStyle)
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('profile')
   const [ownAvatarUrl, setOwnAvatarUrl] = useState<string | null>(null)
-  const avatarFetched = useRef(false)
   const rooms = useRoomStore((s) => s.rooms)
 
   useEffect(() => {
-    if (avatarFetched.current) return
-    const url = getOwnAvatarUrl()
-    if (url) {
-      setOwnAvatarUrl(url)
-      avatarFetched.current = true
+    if (!session?.userId) {
+      setOwnAvatarUrl(null)
+      return
     }
-  }, [rooms])
+    setOwnAvatarUrl(getOwnAvatarUrl())
+  }, [session?.userId, rooms])
 
   // Close on Escape — bound directly here so it fires whenever the modal is mounted,
   // regardless of which element has focus inside it.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setSettingsModal(false)
-      }
+      if (e.key !== 'Escape') return
+      if (document.querySelector('[data-waifutxt-avatar-crop-open]')) return
+      e.preventDefault()
+      setSettingsModal(false)
     }
     document.addEventListener('keydown', handler, true) // capture phase — fires before anything else
     return () => document.removeEventListener('keydown', handler, true)
@@ -498,11 +497,35 @@ export function SettingsModal() {
 
           {activeSection === 'profile' && (
             <div className="mt-6 space-y-4">
-              <div className="p-4 rounded-lg border border-border bg-bg-primary/40 flex items-center gap-4">
-                <Avatar src={displayedOwnAvatarUrl} name={session?.userId || '?'} size={56} status="online" />
-                <div className="min-w-0">
-                  <p className="text-lg font-semibold text-text-primary truncate">{username}</p>
-                  <p className="text-sm text-text-muted truncate">{session?.userId || 'Non connecté'}</p>
+              <div className="p-4 rounded-lg border border-border bg-bg-primary/40 flex flex-col sm:flex-row sm:items-start gap-4">
+                <div className="flex items-center gap-4 shrink-0">
+                  <Avatar src={displayedOwnAvatarUrl} name={session?.userId || '?'} size={56} status="online" />
+                  <div className="min-w-0 sm:hidden">
+                    <p className="text-lg font-semibold text-text-primary truncate">{username}</p>
+                    <p className="text-sm text-text-muted truncate">{session?.userId || 'Non connecté'}</p>
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0 space-y-3">
+                  <div className="hidden sm:block">
+                    <p className="text-lg font-semibold text-text-primary truncate">{username}</p>
+                    <p className="text-sm text-text-muted truncate">{session?.userId || 'Non connecté'}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/80 bg-bg-secondary/40 p-3 space-y-2">
+                    <p className="text-sm font-medium text-text-primary">Photo de profil (serveur Matrix)</p>
+                    {waifuOptIn && (
+                      <p className="text-xs text-text-muted">
+                        L’option waifu remplace l’affichage de ton avatar dans WaifuTxT_, mais la photo ci-dessous est
+                        bien celle stockée sur le serveur pour les autres clients (Element, etc.).
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <Avatar src={ownAvatarUrl} name={session?.userId || '?'} size={40} />
+                      <ProfileAvatarUpload
+                        disabled={!session}
+                        onAvatarUpdated={(url) => setOwnAvatarUrl(url)}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

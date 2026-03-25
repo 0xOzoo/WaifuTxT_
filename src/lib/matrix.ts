@@ -543,7 +543,8 @@ function syncRooms() {
 
     let avatarUrl: string | null = null
     try {
-      avatarUrl = room.getAvatarUrl(baseUrl, 48, 48, 'crop', false, true) || null
+      const roomMxc = room.getMxcAvatarUrl()
+      avatarUrl = roomMxc ? mxcToAvatarHttpUrl(roomMxc) : null
     } catch {
       // ignore
     }
@@ -709,21 +710,18 @@ function getVoiceParticipants(
     const memberStateContent = (memberStateEvent?.getContent() as Record<string, unknown> | undefined) || {}
     let avatarUrl: string | null = null
     try {
-      avatarUrl = member?.getAvatarUrl(baseUrl, 24, 24, 'crop', false, false, true) || null
-      if (!avatarUrl && typeof memberStateContent.avatar_url === 'string' && client) {
-        avatarUrl = client.mxcUrlToHttp(memberStateContent.avatar_url, 24, 24, 'crop', false, false, true) || null
+      avatarUrl = memberAvatarHttpUrl(member || null)
+      if (!avatarUrl && typeof memberStateContent.avatar_url === 'string') {
+        avatarUrl = mxcToAvatarHttpUrl(memberStateContent.avatar_url as string)
       }
       if (!avatarUrl && client) {
         const userObj = client.getUser(userId) as { avatarUrl?: string | null } | null
         if (typeof userObj?.avatarUrl === 'string' && userObj.avatarUrl) {
-          avatarUrl = client.mxcUrlToHttp(userObj.avatarUrl, 24, 24, 'crop', false, false, true) || null
+          avatarUrl = mxcToAvatarHttpUrl(userObj.avatarUrl)
         }
       }
     } catch {
       // ignore
-    }
-    if (avatarUrl) {
-      avatarUrl = getMediaUrlWithAccessToken(avatarUrl) || avatarUrl
     }
     const fallbackLocalpart = userId.replace(/^@/, '').split(':')[0] || userId
     const displayName =
@@ -769,7 +767,7 @@ export async function getUserProfileBasics(
     displayName = userObj.displayName.trim()
   }
   if (typeof userObj?.avatarUrl === 'string' && userObj.avatarUrl) {
-    avatarUrl = client.mxcUrlToHttp(userObj.avatarUrl, size, size, 'crop', false, false, true) || null
+    avatarUrl = mxcToAvatarHttpUrl(userObj.avatarUrl)
   }
 
   if (!displayName || !avatarUrl) {
@@ -778,11 +776,7 @@ export async function getUserProfileBasics(
       if (!member) continue
       if (!displayName && member.name) displayName = member.name
       if (!avatarUrl) {
-        try {
-          avatarUrl = member.getAvatarUrl(client.baseUrl, size, size, 'crop', false, false, true) || null
-        } catch {
-          // ignore
-        }
+        avatarUrl = memberAvatarHttpUrl(member)
       }
       if (displayName && avatarUrl) break
     }
@@ -796,15 +790,11 @@ export async function getUserProfileBasics(
         displayName = profile.displayname.trim()
       }
       if (!avatarUrl && typeof profile?.avatar_url === 'string' && profile.avatar_url) {
-        avatarUrl = client.mxcUrlToHttp(profile.avatar_url, size, size, 'crop', false, false, true) || null
+        avatarUrl = mxcToAvatarHttpUrl(profile.avatar_url)
       }
     } catch {
       // ignore
     }
-  }
-
-  if (avatarUrl) {
-    avatarUrl = getMediaUrlWithAccessToken(avatarUrl) || avatarUrl
   }
 
   const result = { displayName, avatarUrl }
@@ -823,9 +813,7 @@ export async function getRoomMemberProfileBasics(
   if (fromCache) {
     return {
       displayName: fromCache.displayName,
-      avatarUrl: fromCache.avatarMxc
-        ? client.mxcUrlToHttp(fromCache.avatarMxc, size, size, 'crop', false, false, true) || null
-        : null,
+      avatarUrl: fromCache.avatarMxc ? mxcToAvatarHttpUrl(fromCache.avatarMxc) : null,
     }
   }
 
@@ -848,9 +836,7 @@ export async function getRoomMemberProfileBasics(
   if (fallback) {
     return {
       displayName: fallback.displayName,
-      avatarUrl: fallback.avatarMxc
-        ? client.mxcUrlToHttp(fallback.avatarMxc, size, size, 'crop', false, false, true) || null
-        : null,
+      avatarUrl: fallback.avatarMxc ? mxcToAvatarHttpUrl(fallback.avatarMxc) : null,
     }
   }
 
@@ -862,12 +848,7 @@ function encryptedFallbackMessage(event: MatrixEvent, roomId: string): MessageEv
   if (!sender) return null
   const room = client?.getRoom(roomId)
   const member = room?.getMember(sender)
-  let senderAvatar: string | null = null
-  try {
-    senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
-  } catch {
-    // ignore
-  }
+  const senderAvatar = member ? memberAvatarHttpUrl(member) : null
   return {
     eventId: event.getId() || `${roomId}-${event.getTs()}`,
     roomId,
@@ -888,12 +869,7 @@ function deletedFallbackMessage(event: MatrixEvent, roomId: string): MessageEven
   if (!sender) return null
   const room = client?.getRoom(roomId)
   const member = room?.getMember(sender)
-  let senderAvatar: string | null = null
-  try {
-    senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
-  } catch {
-    // ignore
-  }
+  const senderAvatar = member ? memberAvatarHttpUrl(member) : null
   return {
     eventId: event.getId() || `${roomId}-${event.getTs()}`,
     roomId,
@@ -1022,12 +998,7 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
     }
   }
 
-  let senderAvatar: string | null = null
-  try {
-    senderAvatar = member?.getAvatarUrl(client!.baseUrl, 40, 40, 'crop', false, false, true) || null
-  } catch {
-    // ignore
-  }
+  const senderAvatar = member ? memberAvatarHttpUrl(member) : null
 
   return {
     eventId: event.getId() || `${roomId}-${event.getTs()}`,
@@ -1557,9 +1528,9 @@ export async function loadRoomMembers(roomId: string): Promise<void> {
       let avatarUrl: string | null = null
       try {
         if (sdkM) {
-          avatarUrl = sdkM.getAvatarUrl(baseUrl, 40, 40, 'crop', false, false, true) || null
+          avatarUrl = memberAvatarHttpUrl(sdkM)
         } else if (info.avatar_url) {
-          avatarUrl = client!.mxcUrlToHttp(info.avatar_url, 40, 40, 'crop', false, false, true) || null
+          avatarUrl = mxcToAvatarHttpUrl(info.avatar_url as string)
         }
       } catch {
         // ignore
@@ -1582,7 +1553,7 @@ export async function loadRoomMembers(roomId: string): Promise<void> {
     members = room.getMembers().filter((m) => m.membership === 'join').map((m) => {
       let avatarUrl: string | null = null
       try {
-        avatarUrl = m.getAvatarUrl(baseUrl, 40, 40, 'crop', false, false, true) || null
+        avatarUrl = memberAvatarHttpUrl(m)
       } catch { /* ignore */ }
       const p = client!.getUser(m.userId)?.presence
       const presence: RoomMember['presence'] =
@@ -1738,19 +1709,90 @@ export function getOwnAvatarUrl(): string | null {
   if (!client) return null
   const userId = client.getUserId()
   if (!userId) return null
-  // Use the same RoomMember.getAvatarUrl() path as message avatars — it reads
-  // from sync state already in memory, no network call needed.
   for (const room of client.getRooms()) {
     const member = room.getMember(userId)
     if (!member) continue
-    try {
-      const url = member.getAvatarUrl(client.baseUrl, 40, 40, 'crop', false, false, true)
-      if (url) return url
-    } catch {
-      continue
-    }
+    const url = memberAvatarHttpUrl(member)
+    if (url) return url
+  }
+  const userObj = client.getUser(userId) as { avatarUrl?: string | null } | null
+  const mxc = typeof userObj?.avatarUrl === 'string' ? userObj.avatarUrl : ''
+  if (mxc) {
+    const url = mxcToAvatarHttpUrl(mxc)
+    if (url) return url
   }
   return null
+}
+
+/**
+ * Uploads a cropped image to the homeserver media repo and sets the global Matrix profile avatar.
+ */
+export async function uploadProfileAvatar(imageBlob: Blob): Promise<{ mxcUrl: string; httpPreviewUrl: string | null }> {
+  const c = await ensureClientReady()
+  const userId = c.getUserId()
+  if (!userId) throw new Error('Non connecté')
+
+  const mime =
+    imageBlob.type && imageBlob.type.startsWith('image/')
+      ? imageBlob.type
+      : 'image/png'
+  const ext =
+    mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : mime.includes('webp') ? 'webp' : mime.includes('gif') ? 'gif' : 'png'
+  const file = new File([imageBlob], `avatar.${ext}`, { type: mime })
+
+  const upload = await c.uploadContent(file)
+  const contentUri = upload.content_uri
+  if (!contentUri) throw new Error('Le serveur n’a pas renvoyé d’URI média')
+
+  await c.setAvatarUrl(contentUri)
+
+  const user = c.getUser(userId)
+  user?.setAvatarUrl?.(contentUri)
+  userProfileCache.delete(userId)
+  roomJoinedMembersCache.clear()
+
+  try {
+    syncRooms()
+  } catch {
+    // ignore
+  }
+
+  const httpPreviewUrl = mxcToAvatarHttpUrl(contentUri)
+
+  return { mxcUrl: contentUri, httpPreviewUrl }
+}
+
+/**
+ * Uploads an animated (or static) GIF as the global Matrix avatar — no re-encoding, animation is kept.
+ */
+export async function uploadProfileAvatarGif(file: File): Promise<{ mxcUrl: string; httpPreviewUrl: string | null }> {
+  const c = await ensureClientReady()
+  const userId = c.getUserId()
+  if (!userId) throw new Error('Non connecté')
+
+  const filename = file.name.toLowerCase().endsWith('.gif') ? file.name : 'avatar.gif'
+  const uploadFile = new File([file], filename, { type: 'image/gif' })
+
+  const upload = await c.uploadContent(uploadFile)
+  const contentUri = upload.content_uri
+  if (!contentUri) throw new Error('Le serveur n’a pas renvoyé d’URI média')
+
+  await c.setAvatarUrl(contentUri)
+
+  const user = c.getUser(userId)
+  user?.setAvatarUrl?.(contentUri)
+  userProfileCache.delete(userId)
+  roomJoinedMembersCache.clear()
+
+  try {
+    syncRooms()
+  } catch {
+    // ignore
+  }
+
+  const httpPreviewUrl = mxcToAvatarHttpUrl(contentUri)
+
+  return { mxcUrl: contentUri, httpPreviewUrl }
 }
 
 export async function getSessions(): Promise<DeviceInfo[]> {
@@ -1855,6 +1897,27 @@ export function getMediaUrlWithAccessToken(url: string): string | null {
     return auth ? appendAccessToken(auth, token) : null
   }
   return appendAccessToken(url, token)
+}
+
+/**
+ * Full media download URL for an avatar MXC (no thumbnail). Thumbnails often flatten GIFs to a static frame;
+ * the raw file keeps animation. Browser scales via CSS object-cover on <img>.
+ */
+export function mxcToAvatarHttpUrl(mxc: string | null | undefined): string | null {
+  if (!client || !mxc || typeof mxc !== 'string' || !mxc.startsWith('mxc://')) return null
+  try {
+    const raw = client.mxcUrlToHttp(mxc, undefined, undefined, undefined, false, false, true)
+    if (!raw) return null
+    return getMediaUrlWithAccessToken(raw) || raw
+  } catch {
+    return null
+  }
+}
+
+function memberAvatarHttpUrl(member: import('matrix-js-sdk').RoomMember | null | undefined): string | null {
+  if (!member) return null
+  const mxc = member.getMxcAvatarUrl?.()
+  return mxc ? mxcToAvatarHttpUrl(mxc) : null
 }
 
 export async function loadMediaWithAuth(url: string): Promise<string | null> {
@@ -2027,11 +2090,7 @@ export async function getUrlPreview(url: string): Promise<UrlPreviewData | null>
   }
 }
 
-export function resolveAvatarUrl(mxcUrl: string | null, size = 48): string | null {
-  if (!mxcUrl || !client) return null
-  try {
-    return client.mxcUrlToHttp(mxcUrl, size, size, 'crop', false, true) || null
-  } catch {
-    return null
-  }
+/** @param _size ignored — avatars use full download URL for GIF compatibility */
+export function resolveAvatarUrl(mxcUrl: string | null, _size = 48): string | null {
+  return mxcToAvatarHttpUrl(mxcUrl)
 }
