@@ -317,10 +317,10 @@ export function RoomSidebar() {
     const roomMap = new Map(joinedOnly.map((r) => [r.roomId, r]))
 
     if (activeSpaceId === null) {
-      // Flat mode: no space active
+      // DM-only mode: the "Messages" button shows only direct messages
       const key = '_flat'
       const flatRooms = joinedOnly
-        .filter((r) => !r.isSpace)
+        .filter((r) => r.isDirect)
         .sort((a, b) => b.lastMessageTs - a.lastMessageTs)
       const natural: LayoutItem[] = flatRooms.map((r) => ({ t: 'r', id: r.roomId }))
       const ordered = applyStoredLayout(sidebarLayout[key], natural)
