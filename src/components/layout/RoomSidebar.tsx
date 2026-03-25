@@ -72,10 +72,18 @@ function buildNaturalOrder(
   uncatRooms: RoomSummary[],
   categories: { id: string; rooms: RoomSummary[] }[],
 ): LayoutItem[] {
-  const items: LayoutItem[] = uncatRooms.map((r) => ({ t: 'r' as const, id: r.roomId }))
+  // Track added IDs to prevent duplicates: a room can appear as both a direct
+  // child of the space AND a child of a sub-space simultaneously in Matrix.
+  const seen = new Set<string>()
+  const items: LayoutItem[] = []
+  for (const r of uncatRooms) {
+    if (!seen.has(r.roomId)) { seen.add(r.roomId); items.push({ t: 'r' as const, id: r.roomId }) }
+  }
   for (const cat of categories) {
-    items.push({ t: 'c', id: cat.id })
-    for (const room of cat.rooms) items.push({ t: 'r', id: room.roomId })
+    if (!seen.has(cat.id)) { seen.add(cat.id); items.push({ t: 'c', id: cat.id }) }
+    for (const room of cat.rooms) {
+      if (!seen.has(room.roomId)) { seen.add(room.roomId); items.push({ t: 'r', id: room.roomId }) }
+    }
   }
   return items
 }
@@ -89,10 +97,15 @@ function applyStoredLayout(
 ): LayoutItem[] {
   if (!stored || stored.length === 0) return natural
   const validIds = new Set(natural.map((i) => i.id))
-  const applied = stored.filter((i) => validIds.has(i.id))
-  const usedIds = new Set(applied.map((i) => i.id))
+  // Filter stored list to valid items only, deduplicating as we go
+  const seen = new Set<string>()
+  const applied: LayoutItem[] = []
+  for (const item of stored) {
+    if (validIds.has(item.id) && !seen.has(item.id)) { seen.add(item.id); applied.push(item) }
+  }
+  // Append items from natural order that aren't in the stored list yet
   for (const item of natural) {
-    if (!usedIds.has(item.id)) applied.push(item)
+    if (!seen.has(item.id)) { seen.add(item.id); applied.push(item) }
   }
   return applied
 }
