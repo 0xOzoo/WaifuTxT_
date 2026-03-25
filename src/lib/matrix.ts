@@ -549,7 +549,13 @@ function syncRooms() {
       const childEvents = room.currentState.getStateEvents('m.space.child')
       for (const ev of childEvents) {
         const stateKey = ev.getStateKey()
-        if (ev.getContent()?.via && stateKey) children.push(stateKey)
+        // An m.space.child event with non-empty content = active child.
+        // Empty content ({}) means the child was removed (Matrix state deletion).
+        // We do NOT require 'via' — it's recommended but not mandatory per spec,
+        // and some clients/servers omit it, which would silently hide rooms.
+        const content = ev.getContent()
+        const isActive = stateKey && content && typeof content === 'object' && Object.keys(content).length > 0
+        if (isActive) children.push(stateKey)
       }
     }
 

@@ -14,10 +14,17 @@ export function SpaceSidebar() {
   const activeSpaceId = useRoomStore((s) => s.activeSpaceId)
   const setActiveSpace = useRoomStore((s) => s.setActiveSpace)
 
-  const spaces = useMemo(
-    () => Array.from(rooms.values()).filter((r) => r.isSpace),
-    [rooms],
-  )
+  // Only top-level spaces: exclude sub-spaces that are children of another space
+  const spaces = useMemo(() => {
+    const allSpaces = Array.from(rooms.values()).filter((r) => r.isSpace)
+    const childSpaceIds = new Set<string>()
+    for (const space of allSpaces) {
+      for (const childId of space.children) {
+        if (rooms.get(childId)?.isSpace) childSpaceIds.add(childId)
+      }
+    }
+    return allSpaces.filter((s) => !childSpaceIds.has(s.roomId))
+  }, [rooms])
 
   const submitCreateSpace = async (e: FormEvent) => {
     e.preventDefault()
