@@ -10,12 +10,14 @@ import { AccentColorPicker } from '../settings/AccentColorPicker'
 import { ThemePicker } from '../settings/ThemePicker'
 import { ProfileAvatarUpload } from '../settings/ProfileAvatarUpload'
 import { ProfileStatusSettings } from '../settings/ProfileStatusSettings'
+import { CustomizationSettings } from '../settings/CustomizationSettings'
 import { WAIFU_OPTIONS, getWaifuById } from '../../lib/waifu'
 
 const SETTINGS_SECTIONS = [
   { id: 'profile', label: 'Profil' },
   { id: 'security', label: 'Sécurité' },
   { id: 'appearance', label: 'Apparence' },
+  { id: 'customization', label: 'Personnalisation' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'shortcuts', label: 'Raccourcis' },
   { id: 'account', label: 'Compte' },
@@ -664,6 +666,10 @@ export function SettingsModal() {
                 </div>
               </div>
             </div>
+          )}
+
+          {activeSection === 'customization' && (
+            <CustomizationSettings />
           )}
 
           {activeSection === 'notifications' && (

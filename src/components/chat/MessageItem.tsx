@@ -15,7 +15,7 @@ import {
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
-import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
+import { EmojiPicker, addRecentEmoji } from '../common/EmojiPicker'
 import type { EncryptedFileInfo, MessageEvent, RoomSummary } from '../../types/matrix'
 import { Avatar } from '../common/Avatar'
 import { UserProfileCard } from '../common/UserProfileCard'
@@ -39,7 +39,6 @@ import { useUiStore } from '../../stores/uiStore'
 const URL_REGEX = /https?:\/\/[^\s<>"']+/g
 const TOKEN_REGEX = /(https?:\/\/[^\s<>"']+|<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?|#[A-Za-z0-9._=+\-/]+)/g
 const MENTION_REGEX = /(<@[^>\s]+>|@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?:\:\d+)?|#[A-Za-z0-9._=+\-/]+)/g
-const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥']
 
 function mxidToMentionLabel(raw: string): string {
   const mxid = raw.replace(/^<@/, '').replace(/>$/, '').replace(/^@/, '')
@@ -319,18 +318,6 @@ function getTikTokVideoId(url: string): string | null {
   return null
 }
 
-function unifiedToEmoji(unified: string): string {
-  const codepoints = unified
-    .split('-')
-    .map((hex) => parseInt(hex, 16))
-    .filter((cp) => Number.isFinite(cp))
-  if (codepoints.length === 0) return ''
-  try {
-    return String.fromCodePoint(...codepoints)
-  } catch {
-    return ''
-  }
-}
 
 const DIRECT_IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif)(\?.*)?$/i
 const DIRECT_VIDEO_EXT = /\.(mp4|webm|ogg|mov)(\?.*)?$/i
@@ -1016,13 +1003,12 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [showReactionPicker, setShowReactionPicker] = useState(false)
-  const [hoveredPickerEmoji, setHoveredPickerEmoji] = useState<{ emoji: string; name: string; command: string } | null>(null)
+  const [pickerDir, setPickerDir] = useState<'up' | 'down'>('up')
   const showActionBar = !isEditing && (canReplyMessage || canEditMessage || canReactMessage)
   const actionButtonClass =
     'inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-bg-tertiary/85 text-text-secondary hover:text-text-primary hover:border-accent-pink/60 hover:bg-bg-hover transition-all cursor-pointer shadow-sm'
   const senderNameRef = useRef<HTMLSpanElement | null>(null)
   const reactionPickerRef = useRef<HTMLDivElement | null>(null)
-  const emojiPickerShellRef = useRef<HTMLDivElement | null>(null)
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const editTargetEventId = useUiStore((s) => s.editTargetEventId)
@@ -1046,6 +1032,12 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
 
   useEffect(() => {
     if (!showReactionPicker) return
+    // Détermine si le picker doit s'ouvrir vers le haut ou le bas
+    if (wrapperRef.current) {
+      const rect = wrapperRef.current.getBoundingClientRect()
+      // 444 = hauteur du picker, 40 = marge de sécurité
+      setPickerDir(rect.top >= 484 ? 'up' : 'down')
+    }
     const onClickOutside = (event: MouseEvent) => {
       if (!reactionPickerRef.current) return
       if (reactionPickerRef.current.contains(event.target as Node)) return
@@ -1053,45 +1045,6 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
     }
     document.addEventListener('mousedown', onClickOutside)
     return () => document.removeEventListener('mousedown', onClickOutside)
-  }, [showReactionPicker])
-
-  useEffect(() => {
-    if (!showReactionPicker || !emojiPickerShellRef.current) return
-    const root = emojiPickerShellRef.current
-    const parseEmojiMeta = (target: EventTarget | null) => {
-      const el = target as HTMLElement | null
-      if (!el) return null
-      const btn = el.closest('button.epr-emoji') as HTMLElement | null
-      if (!btn) return null
-      const unified = (btn.getAttribute('data-unified') || '').trim()
-      const emojiChar = unifiedToEmoji(unified) || (btn.textContent || '').trim()
-      if (!emojiChar) return null
-      const ariaName = (btn.getAttribute('aria-label') || '').trim()
-      const rawFullName = (btn.getAttribute('data-full-name') || '').trim()
-      const aliases = rawFullName.split(',').map((s) => s.trim()).filter(Boolean)
-      const fallbackAlias = ariaName.toLowerCase().replace(/\s+/g, '_')
-      const alias = aliases.length > 0 ? aliases[aliases.length - 1].toLowerCase().replace(/\s+/g, '_') : fallbackAlias
-      return {
-        emoji: emojiChar,
-        name: ariaName || 'emoji',
-        command: `:${alias}:`,
-      }
-    }
-    const onMouseOver = (event: MouseEvent) => {
-      const meta = parseEmojiMeta(event.target)
-      if (meta) setHoveredPickerEmoji(meta)
-    }
-    const onMouseOut = (event: MouseEvent) => {
-      const next = event.relatedTarget as HTMLElement | null
-      if (next && root.contains(next) && next.closest('button.epr-emoji')) return
-      setHoveredPickerEmoji(null)
-    }
-    root.addEventListener('mouseover', onMouseOver)
-    root.addEventListener('mouseout', onMouseOut)
-    return () => {
-      root.removeEventListener('mouseover', onMouseOver)
-      root.removeEventListener('mouseout', onMouseOut)
-    }
   }, [showReactionPicker])
 
   // Auto-focus edit textarea whenever edit mode activates
@@ -1209,54 +1162,15 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
                 {showReactionPicker && (
                   <div
                     ref={reactionPickerRef}
-                    className="absolute right-0 bottom-full mb-1 w-[300px] overflow-hidden rounded-xl border border-border bg-bg-tertiary shadow-lg z-20"
+                    className={`absolute right-0 z-30 ${pickerDir === 'up' ? 'bottom-full mb-1' : 'top-full mt-1'}`}
                   >
-                    <div ref={emojiPickerShellRef}>
-                      <EmojiPicker
-                        theme={Theme.DARK}
-                        width={300}
-                        height={300}
-                        previewConfig={{ showPreview: false }}
-                        searchDisabled={false}
-                        onEmojiClick={(emojiData: EmojiClickData) => {
-                          setShowReactionPicker(false)
-                          setHoveredPickerEmoji(null)
-                          void handleToggleReaction(emojiData.emoji)
-                        }}
-                      />
-                    </div>
-                    <div className="border-t border-border/70 px-2 py-1.5 bg-bg-tertiary/95 min-h-[58px]">
-                      {hoveredPickerEmoji ? (
-                        <div className="flex items-center gap-2 text-text-secondary">
-                          <span className="text-2xl leading-none">{hoveredPickerEmoji.emoji}</span>
-                          <div className="min-w-0">
-                            <p className="text-sm truncate">{hoveredPickerEmoji.name}</p>
-                            <p className="text-xs text-text-muted truncate">{hoveredPickerEmoji.command}</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <p className="mb-1 text-[10px] uppercase tracking-wide text-text-muted">Réactions rapides</p>
-                          <div className="flex items-center gap-1">
-                            {QUICK_REACTIONS.map((emoji) => (
-                              <button
-                                key={emoji}
-                                className="h-7 w-7 rounded-md hover:bg-bg-hover transition-colors text-base cursor-pointer"
-                                onClick={() => {
-                                  setShowReactionPicker(false)
-                                  setHoveredPickerEmoji(null)
-                                  void handleToggleReaction(emoji)
-                                }}
-                                title={`Réagir avec ${emoji}`}
-                                aria-label={`Réagir avec ${emoji}`}
-                              >
-                                {emoji}
-                              </button>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
+                    <EmojiPicker
+                      onSelect={(emoji) => {
+                        addRecentEmoji(emoji)
+                        setShowReactionPicker(false)
+                        void handleToggleReaction(emoji)
+                      }}
+                    />
                   </div>
                 )}
               </div>

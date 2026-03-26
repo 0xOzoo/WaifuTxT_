@@ -8,13 +8,15 @@ import {
   type ChangeEvent,
   type ClipboardEvent,
 } from 'react'
-import emojiData from 'emoji-picker-react/src/data/emojis-en.json'
+import emojibaseShortcodes from 'emojibase-data/en/shortcodes/emojibase.json'
+import emojibaseData from 'emojibase-data/en/data.json'
 import { useRoomStore } from '../../stores/roomStore'
 import { useUiStore } from '../../stores/uiStore'
 import { useAuthStore } from '../../stores/authStore'
 import { sendMessage, sendFile, sendImage, sendTyping } from '../../lib/matrix'
 import { Avatar } from '../common/Avatar'
 import type { RoomMember, RoomSummary } from '../../types/matrix'
+import { EmojiPicker, addRecentEmoji } from '../common/EmojiPicker'
 
 interface PendingImage {
   id: string
@@ -25,11 +27,6 @@ interface PendingImage {
 interface EmojiSuggestion {
   emoji: string
   shortcode: string
-}
-
-interface PickerDataEmoji {
-  n: string[]
-  u: string
 }
 
 function unifiedToEmoji(unified: string): string {
@@ -55,21 +52,26 @@ function toShortcode(value: string): string {
 }
 
 function buildEmojiSuggestions(): EmojiSuggestion[] {
-  const allGroups = Object.values(emojiData.emojis) as PickerDataEmoji[][]
-  const flat = allGroups.flat()
-  const byShortcode = new Map<string, EmojiSuggestion>()
+  const sc = emojibaseShortcodes as Record<string, string | string[]>
+  const seen = new Set<string>()
+  const result: EmojiSuggestion[] = []
 
-  for (const entry of flat) {
-    const emoji = unifiedToEmoji(entry.u)
-    if (!emoji) continue
-    const names = entry.n || []
-    const bestName = [...names].sort((a, b) => b.length - a.length)[0] || names[0] || ''
-    const shortcode = toShortcode(bestName)
-    if (!shortcode || byShortcode.has(shortcode)) continue
-    byShortcode.set(shortcode, { emoji, shortcode })
+  const sorted = [...(emojibaseData as { hexcode: string; emoji: string; order?: number }[])]
+    .sort((a, b) => (a.order ?? 99999) - (b.order ?? 99999))
+
+  for (const entry of sorted) {
+    const value = sc[entry.hexcode] ?? sc[entry.hexcode.toLowerCase()]
+    if (!value) continue
+    const shortcodes = Array.isArray(value) ? value : [value]
+    for (const raw of shortcodes) {
+      const shortcode = toShortcode(raw)
+      if (!shortcode || seen.has(shortcode)) continue
+      seen.add(shortcode)
+      result.push({ emoji: entry.emoji, shortcode })
+    }
   }
 
-  return Array.from(byShortcode.values()).sort((a, b) => a.shortcode.localeCompare(b.shortcode))
+  return result
 }
 
 const EMOJI_SUGGESTIONS = buildEmojiSuggestions()
@@ -163,12 +165,16 @@ export function MessageInput() {
     () => (activeRoomId ? membersMap.get(activeRoomId) || [] : []),
     [activeRoomId, membersMap],
   )
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingImagesRef = useRef<PendingImage[]>([])
   const nextCursorRef = useRef<number | null>(null)
+  const emojiPickerRef = useRef<HTMLDivElement>(null)
+  const emojiBtnRef = useRef<HTMLButtonElement>(null)
 
   // Restore cursor position after a mention insertion/deletion re-render
   useEffect(() => {
@@ -186,6 +192,21 @@ export function MessageInput() {
   useEffect(() => {
     if (activeRoomId) textareaRef.current?.focus()
   }, [activeRoomId])
+
+  // Close emoji picker on outside click
+  useEffect(() => {
+    if (!showEmojiPicker) return
+    const handler = (e: MouseEvent) => {
+      if (
+        emojiPickerRef.current?.contains(e.target as Node) ||
+        emojiBtnRef.current?.contains(e.target as Node)
+      )
+        return
+      setShowEmojiPicker(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showEmojiPicker])
 
   // Inject mention from UserProfileCard / MemberPanel
   useEffect(() => {
@@ -727,6 +748,46 @@ export function MessageInput() {
             style={{ minHeight: '24px', color: 'transparent', caretColor: 'var(--color-text-primary)' }}
           />
         </div>
+        {/* Emoji picker button */}
+        <div className="relative flex-shrink-0">
+          <button
+            ref={emojiBtnRef}
+            type="button"
+            onClick={() => setShowEmojiPicker((v) => !v)}
+            className={`p-2.5 transition-colors cursor-pointer ${showEmojiPicker ? 'text-accent-pink' : 'text-text-muted hover:text-text-secondary'}`}
+            title="Insérer un émoji"
+            aria-label="Insérer un émoji"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+          {showEmojiPicker && (
+            <div
+              ref={emojiPickerRef}
+              className="absolute bottom-full right-0 mb-2 z-40"
+            >
+              <EmojiPicker
+                onSelect={(emoji) => {
+                  addRecentEmoji(emoji)
+                  const textarea = textareaRef.current
+                  if (textarea) {
+                    const start = textarea.selectionStart ?? text.length
+                    const end = textarea.selectionEnd ?? text.length
+                    const newText = text.slice(0, start) + emoji + text.slice(end)
+                    setText(newText)
+                    nextCursorRef.current = start + emoji.length
+                    setTimeout(() => textarea.focus(), 0)
+                  } else {
+                    setText((prev) => prev + emoji)
+                  }
+                  setShowEmojiPicker(false)
+                }}
+              />
+            </div>
+          )}
+        </div>
+
         <button
           onClick={handleSend}
           disabled={isSending || (!text.trim() && pendingImages.length === 0)}
