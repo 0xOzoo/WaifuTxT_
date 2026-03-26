@@ -166,6 +166,7 @@ export function MessageInput() {
     [activeRoomId, membersMap],
   )
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [emojiPickerMounted, setEmojiPickerMounted] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -192,6 +193,11 @@ export function MessageInput() {
   useEffect(() => {
     if (activeRoomId) textareaRef.current?.focus()
   }, [activeRoomId])
+
+  // Mount the picker on first open, keep it alive after that
+  useEffect(() => {
+    if (showEmojiPicker) setEmojiPickerMounted(true)
+  }, [showEmojiPicker])
 
   // Close emoji picker on outside click
   useEffect(() => {
@@ -762,10 +768,16 @@ export function MessageInput() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
-          {showEmojiPicker && (
+          {emojiPickerMounted && (
             <div
               ref={emojiPickerRef}
-              className="absolute bottom-full right-0 mb-2 z-40"
+              className="absolute bottom-full right-0 mb-2 z-40 transition-[opacity,transform] duration-[130ms] ease-out"
+              style={{
+                opacity: showEmojiPicker ? 1 : 0,
+                transform: showEmojiPicker ? 'translateY(0) scale(1)' : 'translateY(6px) scale(0.97)',
+                pointerEvents: showEmojiPicker ? 'auto' : 'none',
+                visibility: showEmojiPicker ? 'visible' : 'hidden',
+              }}
             >
               <EmojiPicker
                 onSelect={(emoji) => {

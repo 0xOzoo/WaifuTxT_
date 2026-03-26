@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect, memo } from 'react'
 import emojibaseShortcodes from 'emojibase-data/en/shortcodes/emojibase.json'
 import emojibaseData from 'emojibase-data/en/data.json'
 
@@ -181,7 +181,7 @@ export function TwemojiImg({
   )
 }
 
-function EmojiButton({
+const EmojiButton = memo(function EmojiButton({
   entry,
   onSelect,
   onHover,
@@ -204,7 +204,7 @@ function EmojiButton({
       <TwemojiImg hexcode={entry.hexcode} emoji={entry.emoji} size={22} />
     </button>
   )
-}
+})
 
 // ---------------------------------------------------------------------------
 // Main component
@@ -219,9 +219,28 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
   const [recentEmojis, setRecentEmojis] = useState<EmojiEntry[]>([])
   const [quickReactions, setQuickReactionsState] = useState<QuickReactionEntry[]>(getQuickReactions)
   const [hovered, setHovered] = useState<EmojiEntry | null>(null)
+  // Progressive rendering: start with first category only, add more on idle frames
+  const [renderedCatCount, setRenderedCatCount] = useState(1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sectionRefs = useRef<Map<number, HTMLElement>>(new Map())
   const isScrollingToRef = useRef(false)
+
+  // Progressively render remaining categories so the initial paint is fast
+  useEffect(() => {
+    if (renderedCatCount >= EMOJI_CATEGORY_DEFS.length) return
+    const schedule = (cb: () => void): number =>
+      'requestIdleCallback' in window
+        ? (window as Window & { requestIdleCallback: (cb: () => void, opts?: object) => number })
+            .requestIdleCallback(cb, { timeout: 400 })
+        : window.setTimeout(cb, 16)
+    const cancel = (id: number) =>
+      'cancelIdleCallback' in window
+        ? (window as Window & { cancelIdleCallback: (id: number) => void }).cancelIdleCallback(id)
+        : window.clearTimeout(id)
+
+    const id = schedule(() => setRenderedCatCount((n) => n + 1))
+    return () => cancel(id)
+  }, [renderedCatCount])
 
   // Sync quick reactions when another tab or the settings page updates them
   useEffect(() => {
@@ -264,15 +283,23 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
   const handleLeave = useCallback(() => setHovered(null), [])
 
   const scrollToCategory = useCallback((id: number) => {
-    const el = sectionRefs.current.get(id)
-    const container = scrollRef.current
-    if (!el || !container) return
-    isScrollingToRef.current = true
-    setActiveCategory(id)
-    container.scrollTo({ top: el.offsetTop - 4, behavior: 'smooth' })
-    setTimeout(() => {
-      isScrollingToRef.current = false
-    }, 600)
+    const catIdx = EMOJI_CATEGORY_DEFS.findIndex((c) => c.id === id)
+    // Force-render the target category if not yet rendered
+    if (catIdx >= 0) setRenderedCatCount((n) => Math.max(n, catIdx + 1))
+
+    // Defer scroll until the section is actually in the DOM
+    const doScroll = () => {
+      const el = sectionRefs.current.get(id)
+      const container = scrollRef.current
+      if (!el || !container) return
+      isScrollingToRef.current = true
+      setActiveCategory(id)
+      container.scrollTo({ top: el.offsetTop - 4, behavior: 'smooth' })
+      setTimeout(() => { isScrollingToRef.current = false }, 600)
+    }
+
+    // Give React one frame to flush the state update before scrolling
+    requestAnimationFrame(doScroll)
   }, [])
 
   // Track active category on scroll
@@ -297,7 +324,7 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
 
   return (
     <div
-      className="flex flex-col overflow-hidden rounded-xl border border-border bg-[#1e1f22] shadow-2xl"
+      className="emoji-picker-enter flex flex-col overflow-hidden rounded-xl border border-border bg-[#1e1f22] shadow-2xl"
       style={{ width: 352, height: 444 }}
     >
       {/* Category tabs */}
@@ -431,10 +458,20 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
               </section>
             )}
 
-            {/* Category sections */}
-            {EMOJI_CATEGORY_DEFS.map((cat) => {
+            {/* Category sections — rendered progressively */}
+            {EMOJI_CATEGORY_DEFS.map((cat, idx) => {
               const emojis = GROUPED_EMOJIS.get(cat.id) ?? []
               if (emojis.length === 0) return null
+              // Placeholder for categories not yet rendered
+              if (idx >= renderedCatCount) {
+                return (
+                  <section
+                    key={cat.id}
+                    ref={(el) => { if (el) sectionRefs.current.set(cat.id, el) }}
+                    style={{ minHeight: '120px' }}
+                  />
+                )
+              }
               return (
                 <section
                   key={cat.id}
