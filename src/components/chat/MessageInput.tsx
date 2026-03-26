@@ -73,6 +73,14 @@ function buildEmojiSuggestions(): EmojiSuggestion[] {
 }
 
 const EMOJI_SUGGESTIONS = buildEmojiSuggestions()
+const SHORTCODE_TO_EMOJI = new Map(EMOJI_SUGGESTIONS.map((entry) => [entry.shortcode, entry.emoji]))
+
+function replaceEmojiShortcodes(input: string): string {
+  return input.replace(/:([a-z0-9_]+):/gi, (full, rawCode: string) => {
+    const normalized = toShortcode(rawCode)
+    return SHORTCODE_TO_EMOJI.get(normalized) || full
+  })
+}
 
 function normalizeRoomTag(value: string): string {
   return value
@@ -371,7 +379,7 @@ export function MessageInput() {
 
   const handleSend = useCallback(async () => {
     if (isSending || !activeRoomId) return
-    const msg = text.trim()
+    const msg = replaceEmojiShortcodes(text.trim())
     if (!msg && pendingImages.length === 0) return
 
     setIsSending(true)
