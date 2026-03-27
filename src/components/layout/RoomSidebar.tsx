@@ -16,8 +16,11 @@ import {
   setOwnPresence,
 } from '../../lib/matrix'
 import { getWaifuById } from '../../lib/waifu'
+import { setVoiceMuted, setVoiceDeafened } from '../../lib/voice'
 import type { RoomSummary } from '../../types/matrix'
 import type { PresenceValue } from '../../stores/uiStore'
+import { VoicePanel } from './VoicePanel'
+import { useVoiceStore } from '../../stores/voiceStore'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -186,8 +189,8 @@ function buildDisplay(
 
 export function RoomSidebar() {
   const [search, setSearch] = useState('')
-  const [isMuted, setIsMuted] = useState(false)
-  const [isDeafened, setIsDeafened] = useState(false)
+  const isMuted = useVoiceStore((s) => s.isMuted)
+  const isDeafened = useVoiceStore((s) => s.isDeafened)
   const [voiceActionRoomId, setVoiceActionRoomId] = useState<string | null>(null)
   const [showPresenceMenu, setShowPresenceMenu] = useState(false)
   const [ownPresence, setOwnPresenceStore] = useState<PresenceValue>(() => {
@@ -418,19 +421,27 @@ export function RoomSidebar() {
   }, [voiceScanRooms, membersByRoom, voiceProfileMap])
 
   const spaceName = activeSpaceId ? rooms.get(activeSpaceId)?.name || 'Space' : 'Messages'
+  const speakingUsers = useVoiceStore((s) => s.speakingUsers)
+  const voiceStoreJoinedRoom = useVoiceStore((s) => s.joinedRoomId)
   const joinedVoiceRoomId = useMemo(() => {
+    if (voiceStoreJoinedRoom) return voiceStoreJoinedRoom
     for (const r of rooms.values()) { if (isVoiceRoom(r) && r.voiceJoinedByMe) return r.roomId }
     return null
-  }, [rooms])
+  }, [rooms, voiceStoreJoinedRoom])
 
+  const [voiceError, setVoiceError] = useState<string | null>(null)
   const handleVoiceJoinLeave = async (roomId: string, joined: boolean) => {
     if (voiceActionRoomId) return
     setVoiceActionRoomId(roomId)
+    setVoiceError(null)
     try {
       if (joined) await leaveVoiceRoom(roomId)
       else { await joinVoiceRoom(roomId); setActiveRoom(roomId) }
     } catch (err) {
-      console.error('[Voice] join/leave failed:', err instanceof Error ? err.message : err)
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[Voice] join/leave failed:', msg)
+      setVoiceError(msg)
+      setTimeout(() => setVoiceError(null), 5000)
     } finally { setVoiceActionRoomId(null) }
   }
 
@@ -525,12 +536,15 @@ export function RoomSidebar() {
               const m = roomMembers.find((mem) => mem.userId === p.userId)
               const displayName = m?.displayName || voiceProfileMap[p.userId]?.displayName || p.displayName
               const avatarUrl = m?.avatarUrl || p.avatarUrl || voiceProfileMap[p.userId]?.avatarUrl || null
+              const isSpeaking = speakingUsers.has(p.userId)
               return (
                 <button key={`${room.roomId}:${p.userId}`} onClick={() => setActiveRoom(room.roomId)}
                   className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left text-text-muted hover:text-text-primary hover:bg-bg-hover/40 transition-colors cursor-pointer"
                   title={p.userId}>
-                  <Avatar src={avatarUrl} name={displayName} size={18} />
-                  <span className="text-xs truncate">{displayName}</span>
+                  <div className={`shrink-0 rounded-full transition-[box-shadow] duration-200 ${isSpeaking ? 'ring-2 ring-success' : ''}`}>
+                    <Avatar src={avatarUrl} name={displayName} size={18} />
+                  </div>
+                  <span className={`text-xs truncate ${isSpeaking ? 'text-text-primary' : ''}`}>{displayName}</span>
                 </button>
               )
             })}
@@ -558,6 +572,12 @@ export function RoomSidebar() {
           className="w-full text-xs !py-1.5 !px-2"
         />
       </div>
+
+      {voiceError && (
+        <div className="mx-2 mb-1 px-2.5 py-1.5 rounded-md bg-danger/10 border border-danger/30 text-xs text-danger">
+          {voiceError}
+        </div>
+      )}
 
       <div
         className="flex-1 overflow-y-auto px-2 space-y-0.5"
@@ -654,6 +674,8 @@ export function RoomSidebar() {
         )}
       </div>
 
+      <VoicePanel />
+
       <div className="relative -left-[72px] w-[calc(100%+72px)] min-h-[3.25rem] py-2 pl-[80px] pr-2 flex items-center justify-between gap-2 bg-bg-tertiary/95 border-t border-border">
          {showPresenceMenu && (
           <div
@@ -706,8 +728,9 @@ export function RoomSidebar() {
 
         <div className="flex shrink-0 items-center gap-1.5">
           <button
-            onClick={() => setIsMuted((v) => !v)}
-            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+            onClick={() => setVoiceMuted(!isMuted)}
+            disabled={!voiceStoreJoinedRoom}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
               isMuted
                 ? 'text-danger bg-danger/10 hover:bg-danger/20'
                 : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'
@@ -722,8 +745,9 @@ export function RoomSidebar() {
             </svg>
           </button>
 
-          <button onClick={() => setIsDeafened((v) => !v)}
-            className={`p-1.5 rounded-md transition-colors cursor-pointer ${isDeafened ? 'text-danger bg-danger/10 hover:bg-danger/20' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'}`}
+          <button onClick={() => setVoiceDeafened(!isDeafened)}
+            disabled={!voiceStoreJoinedRoom}
+            className={`p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${isDeafened ? 'text-danger bg-danger/10 hover:bg-danger/20' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover/80'}`}
             title={isDeafened ? "Activer l'audio" : "Désactiver l'audio"}>
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
               {isDeafened

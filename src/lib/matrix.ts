@@ -2,6 +2,8 @@ import type { MatrixSession, MessageEvent, RoomSummary, RoomMember, EncryptedFil
 import { useMessageStore } from '../stores/messageStore'
 import { useRoomStore } from '../stores/roomStore'
 import { useAuthStore } from '../stores/authStore'
+import { useVoiceStore } from '../stores/voiceStore'
+import { setupVoiceStreams, cleanupVoiceStreams } from './voice'
 import { setupVerificationListeners } from './verification'
 
 type MatrixClient = import('matrix-js-sdk').MatrixClient
@@ -158,6 +160,8 @@ async function purgeRustCryptoStores(): Promise<void> {
 
 export async function logout(): Promise<void> {
   if (!client) return
+  cleanupVoiceStreams()
+  useVoiceStore.getState().reset()
   try {
     await client.logout(true)
   } catch {
@@ -1220,6 +1224,11 @@ export async function joinVoiceRoom(roomId: string): Promise<void> {
     }
 
     // Discord-like behavior: one active voice room at a time.
+    const prevVoiceRoom = useVoiceStore.getState().joinedRoomId
+    if (prevVoiceRoom && prevVoiceRoom !== roomId) {
+      cleanupVoiceStreams()
+      useVoiceStore.getState().reset()
+    }
     for (const r of client.getRooms()) {
       if (r.roomId === roomId) continue
       try {
@@ -1230,7 +1239,6 @@ export async function joinVoiceRoom(roomId: string): Promise<void> {
           otherCall.leave?.()
         }
       } catch {
-        // ignore per-room errors and continue
         voiceDebugLog('join: failed to leave previous GroupCall (ignored)', { roomId: r.roomId })
       }
     }
@@ -1262,14 +1270,24 @@ export async function joinVoiceRoom(roomId: string): Promise<void> {
       const alreadyInCall = !!targetCall.hasLocalParticipant?.()
       if (!alreadyInCall) {
         voiceDebugLog('join: entering GroupCall', { roomId })
-        await targetCall.enter?.()
+        cleanupVoiceStreams()
+        try {
+          await targetCall.enter?.()
+        } catch (enterErr) {
+          const msg = enterErr instanceof Error ? enterErr.message : String(enterErr)
+          if (/permission|denied|not allowed|notallowed/i.test(msg)) {
+            throw new Error('Accès au microphone refusé. Autorise le micro dans les paramètres de ton navigateur.')
+          }
+          throw enterErr
+        }
         try {
           await targetCall.setMicrophoneMuted?.(false)
         } catch {
-          // non-blocking
           voiceDebugLog('join: unable to unmute mic after enter (ignored)', { roomId })
         }
       }
+      await setupVoiceStreams(targetCall, matrixSdk)
+      useVoiceStore.getState().setJoinedRoom(roomId)
       voiceDebugLog('join: GroupCall success', { roomId, alreadyInCall })
       syncRooms()
       setTimeout(() => {
@@ -1327,8 +1345,8 @@ export async function joinVoiceRoom(roomId: string): Promise<void> {
     )
   }
 
+  useVoiceStore.getState().setJoinedRoom(roomId)
   syncRooms()
-  // refresh once more after local/remote echo of membership event
   setTimeout(() => {
     try { syncRooms() } catch { /* ignore */ }
   }, 800)
@@ -1338,6 +1356,9 @@ export async function leaveVoiceRoom(roomId: string): Promise<void> {
   if (!client) throw new Error('Client non initialisé')
   const room = client.getRoom(roomId)
   if (!room) throw new Error('Salon introuvable')
+
+  cleanupVoiceStreams()
+  useVoiceStore.getState().reset()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const clientAny = client as any
@@ -1349,7 +1370,6 @@ export async function leaveVoiceRoom(roomId: string): Promise<void> {
     try {
       await clientAny.waitUntilRoomReadyForGroupCalls(roomId)
     } catch {
-      // ignore
       voiceDebugLog('leave: waitUntilRoomReadyForGroupCalls failed (ignored)', { roomId })
     }
     try {
@@ -1366,7 +1386,6 @@ export async function leaveVoiceRoom(roomId: string): Promise<void> {
       }
       voiceDebugLog('leave: no local GroupCall participant, fallback MatrixRTC', { roomId })
     } catch {
-      // fallback MatrixRTC below
       voiceDebugLog('leave: GroupCall leave failed, fallback MatrixRTC', { roomId })
     }
   }

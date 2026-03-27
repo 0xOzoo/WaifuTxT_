@@ -7,7 +7,9 @@ import { ChatArea } from '../chat/ChatArea'
 import { VerificationModal } from '../verification/VerificationModal'
 import { useUiStore } from '../../stores/uiStore'
 import { useRoomStore } from '../../stores/roomStore'
-import { loadRoomMembers, reapplyStoredOwnStatusToStore } from '../../lib/matrix'
+import { loadRoomMembers, reapplyStoredOwnStatusToStore, leaveVoiceRoom } from '../../lib/matrix'
+import { cleanupVoiceStreams } from '../../lib/voice'
+import { useVoiceStore } from '../../stores/voiceStore'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 export function AppShell() {
@@ -28,6 +30,18 @@ export function AppShell() {
     }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
+
+  // Leave voice channel on tab close / navigation
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      const roomId = useVoiceStore.getState().joinedRoomId
+      if (!roomId) return
+      cleanupVoiceStreams()
+      try { leaveVoiceRoom(roomId) } catch { /* best-effort */ }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [])
 
   return (

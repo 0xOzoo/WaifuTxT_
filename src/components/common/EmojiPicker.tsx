@@ -228,15 +228,17 @@ export function EmojiPicker({ onSelect }: EmojiPickerProps) {
   // Progressively render remaining categories so the initial paint is fast
   useEffect(() => {
     if (renderedCatCount >= EMOJI_CATEGORY_DEFS.length) return
+    const w = window as typeof globalThis
+    const hasIdle = typeof (w as { requestIdleCallback?: unknown }).requestIdleCallback === 'function'
     const schedule = (cb: () => void): number =>
-      'requestIdleCallback' in window
-        ? (window as Window & { requestIdleCallback: (cb: () => void, opts?: object) => number })
+      hasIdle
+        ? (w as unknown as { requestIdleCallback: (cb: () => void, opts?: object) => number })
             .requestIdleCallback(cb, { timeout: 400 })
-        : window.setTimeout(cb, 16)
+        : w.setTimeout(cb, 16)
     const cancel = (id: number) =>
-      'cancelIdleCallback' in window
-        ? (window as Window & { cancelIdleCallback: (id: number) => void }).cancelIdleCallback(id)
-        : window.clearTimeout(id)
+      hasIdle
+        ? (w as unknown as { cancelIdleCallback: (id: number) => void }).cancelIdleCallback(id)
+        : w.clearTimeout(id)
 
     const id = schedule(() => setRenderedCatCount((n) => n + 1))
     return () => cancel(id)
