@@ -863,7 +863,32 @@ function EncryptedImage({ message }: { message: MessageEvent }) {
 
 function AudioAttachment({ message }: { message: MessageEvent }) {
   const { url: decryptedUrl } = useDecryptedUrl(message.encryptedFile)
-  const url = message.fileUrl || decryptedUrl
+  const rawUrl = message.fileUrl || decryptedUrl
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState(false)
+
+  // Fetch audio as authenticated blob so the <audio> element can play it
+  // (direct URLs require auth headers which HTMLAudioElement can't send)
+  useEffect(() => {
+    if (!rawUrl) return
+    let cancelled = false
+    setBlobUrl(null)
+    setLoadError(false)
+    loadMediaWithAuth(rawUrl).then((blob) => {
+      if (!cancelled) {
+        if (blob) setBlobUrl(blob)
+        else {
+          // Fallback: try appending access token directly (non-E2EE rooms on lenient servers)
+          const tokenUrl = getMediaUrlWithAccessToken(rawUrl)
+          setBlobUrl(tokenUrl || rawUrl)
+        }
+      }
+    }).catch(() => {
+      if (!cancelled) setLoadError(true)
+    })
+    return () => { cancelled = true }
+  }, [rawUrl])
+
   const audioRef = useRef<HTMLAudioElement>(null)
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
@@ -877,9 +902,9 @@ function AudioAttachment({ message }: { message: MessageEvent }) {
 
   const toggle = useCallback(() => {
     const el = audioRef.current
-    if (!el || !url) return
-    if (playing) { el.pause() } else { el.play() }
-  }, [playing, url])
+    if (!el || !blobUrl) return
+    if (playing) { el.pause() } else { el.play().catch(() => {}) }
+  }, [playing, blobUrl])
 
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const el = audioRef.current
@@ -887,11 +912,13 @@ function AudioAttachment({ message }: { message: MessageEvent }) {
     el.currentTime = Number(e.target.value)
   }, [])
 
+  const isLoading = !!rawUrl && !blobUrl && !loadError
+
   return (
     <div className="mt-1 flex items-center gap-3 p-3 bg-bg-tertiary rounded-lg border border-border max-w-xs">
       <audio
         ref={audioRef}
-        src={url || undefined}
+        src={blobUrl || undefined}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setCurrentTime(0) }}
@@ -900,7 +927,7 @@ function AudioAttachment({ message }: { message: MessageEvent }) {
       />
       <button
         onClick={toggle}
-        disabled={!url}
+        disabled={!blobUrl || isLoading}
         className="shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-accent-pink hover:bg-accent-pink-hover disabled:opacity-50 disabled:cursor-wait transition-colors cursor-pointer"
       >
         {playing ? (
@@ -921,7 +948,7 @@ function AudioAttachment({ message }: { message: MessageEvent }) {
           step={0.1}
           value={currentTime}
           onChange={handleSeek}
-          disabled={!url}
+          disabled={!blobUrl}
           className="w-full h-1 accent-accent-pink cursor-pointer disabled:opacity-50"
         />
         <div className="flex justify-between text-xs text-text-muted">
@@ -929,9 +956,8 @@ function AudioAttachment({ message }: { message: MessageEvent }) {
           <span>{duration ? formatTime(duration) : (message.fileSize != null ? formatFileSize(message.fileSize) : '')}</span>
         </div>
       </div>
-      {!url && message.encryptedFile && (
-        <span className="text-xs text-text-muted shrink-0">Déchiffrement...</span>
-      )}
+      {isLoading && <span className="text-xs text-text-muted shrink-0">Chargement...</span>}
+      {loadError && <span className="text-xs text-danger shrink-0">Erreur</span>}
     </div>
   )
 }
