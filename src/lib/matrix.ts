@@ -213,9 +213,10 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     try {
       if (!room) return
       const type = event.getType()
-      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction' && type !== 'm.room.redaction' && type !== POLL_START && type !== POLL_RESPONSE && type !== POLL_END) return
+      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction' && type !== 'm.room.redaction'
+          && !isPollStart(type) && !isPollResponse(type) && !isPollEnd(type)) return
 
-      if (type === POLL_START) {
+      if (isPollStart(type)) {
         const pollMsg = pollEventToMessage(event, room.roomId)
         if (pollMsg) {
           useMessageStore.getState().addMessage(room.roomId, pollMsg)
@@ -223,8 +224,8 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
         }
         return
       }
-      if (type === POLL_RESPONSE) { handlePollVoteEvent(event, room.roomId); return }
-      if (type === POLL_END) {
+      if (isPollResponse(type)) { handlePollVoteEvent(event, room.roomId); return }
+      if (isPollEnd(type)) {
         const c = event.getContent() as Record<string, unknown>
         const rel = c['m.relates_to'] as Record<string, unknown> | undefined
         const pollId = rel?.event_id as string | undefined
@@ -280,6 +281,29 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
 
         // Replace with real content once decryption completes (success or failure).
         event.once(matrixSdk.MatrixEventEvent.Decrypted, () => {
+          const decryptedType = event.getType()
+          // Handle poll events that were encrypted
+          if (isPollStart(decryptedType)) {
+            const pollMsg = pollEventToMessage(event, room.roomId)
+            if (pollMsg) {
+              const store = useMessageStore.getState()
+              store.replaceMessage(room.roomId, pollMsg.eventId, pollMsg)
+              updateRoomLastMessage(room.roomId, pollMsg)
+            }
+            return
+          }
+          if (isPollResponse(decryptedType)) { handlePollVoteEvent(event, room.roomId); return }
+          if (isPollEnd(decryptedType)) {
+            const c = event.getContent() as Record<string, unknown>
+            const rel = c['m.relates_to'] as Record<string, unknown> | undefined
+            const pollId = rel?.event_id as string | undefined
+            if (pollId) {
+              const store = useMessageStore.getState()
+              const pollMsg = store.getMessages(room.roomId).find((m) => m.eventId === pollId && m.type === 'm.poll')
+              if (pollMsg?.poll) store.replaceMessage(room.roomId, pollId, { ...pollMsg, poll: { ...pollMsg.poll, isClosed: true } })
+            }
+            return
+          }
           const msg = eventToMessage(event, room.roomId)
           if (!msg) return
           if (msg.replacesEventId) {
@@ -1489,11 +1513,20 @@ export async function sendAudio(roomId: string, blob: Blob, duration?: number): 
   } as any)
 }
 
-// ── Polls (MSC3381) ───────────────────────────────────────────────────────────
+// ── Polls (stable Matrix 1.7 + MSC3381 compat) ───────────────────────────────
 
-const POLL_START = 'org.matrix.msc3381.poll.start'
-const POLL_RESPONSE = 'org.matrix.msc3381.poll.response'
-const POLL_END = 'org.matrix.msc3381.poll.end'
+// Stable types (Matrix 1.7 / Element)
+const POLL_START = 'm.poll.start'
+const POLL_RESPONSE = 'm.poll.response'
+const POLL_END = 'm.poll.end'
+// Legacy MSC3381 draft types (for reading old events)
+const POLL_START_MSC = 'org.matrix.msc3381.poll.start'
+const POLL_RESPONSE_MSC = 'org.matrix.msc3381.poll.response'
+const POLL_END_MSC = 'org.matrix.msc3381.poll.end'
+
+function isPollStart(t: string) { return t === POLL_START || t === POLL_START_MSC }
+function isPollResponse(t: string) { return t === POLL_RESPONSE || t === POLL_RESPONSE_MSC }
+function isPollEnd(t: string) { return t === POLL_END || t === POLL_END_MSC }
 
 export async function sendPoll(
   roomId: string,
@@ -1503,21 +1536,21 @@ export async function sendPoll(
 ): Promise<void> {
   if (!client) return
   const answerObjects = answers.map((text, i) => ({
-    id: `answer_${i}`,
-    'org.matrix.msc1767.text': [{ body: text, mimetype: 'text/plain' }],
+    'm.id': `answer_${i}`,
+    'm.text': [{ body: text, mimetype: 'text/plain' }],
   }))
   const fallbackBody = `${question}\n${answers.map((a, i) => `${i + 1}. ${a}`).join('\n')}`
   await (client as any).sendEvent(roomId, POLL_START, {
     [POLL_START]: {
       question: {
         body: question,
-        'org.matrix.msc1767.text': [{ body: question, mimetype: 'text/plain' }],
+        'm.text': [{ body: question, mimetype: 'text/plain' }],
       },
       answers: answerObjects,
-      kind: `org.matrix.msc3381.poll.${kind}`,
+      'm.kind': `m.${kind}`,
       max_selections: 1,
     },
-    'org.matrix.msc1767.text': [{ body: fallbackBody, mimetype: 'text/plain' }],
+    'm.text': [{ body: fallbackBody, mimetype: 'text/plain' }],
   })
 }
 
@@ -1526,6 +1559,8 @@ export async function sendPollVote(roomId: string, pollEventId: string, answerId
   await (client as any).sendEvent(roomId, POLL_RESPONSE, {
     'm.relates_to': { rel_type: 'm.reference', event_id: pollEventId },
     [POLL_RESPONSE]: { answers: answerIds },
+    // MSC3381 compat key
+    [POLL_RESPONSE_MSC]: { answers: answerIds },
   })
 }
 
@@ -1534,25 +1569,35 @@ function buildPollData(
   roomId: string,
 ): import('../types/matrix').PollData | null {
   const content = pollEvent.getContent() as Record<string, unknown>
-  const start = (content[POLL_START] || content) as Record<string, unknown>
-  const question =
-    (start.question as Record<string, unknown> | undefined)?.body as string | undefined ||
+  // Support stable (m.poll.start) and MSC3381 draft (org.matrix.msc3381.poll.start)
+  const start = (content[POLL_START] || content[POLL_START_MSC] || content) as Record<string, unknown>
+
+  const questionObj = start.question as Record<string, unknown> | undefined
+  // Stable: question['m.text'][0].body, MSC: question.body
+  const qMText = questionObj?.['m.text']
+  const qMsc1767 = questionObj?.['org.matrix.msc1767.text']
+  const question: string | undefined =
+    (Array.isArray(qMText) ? (qMText[0] as Record<string, unknown>)?.body as string : undefined) ||
+    (Array.isArray(qMsc1767) ? (qMsc1767[0] as Record<string, unknown>)?.body as string : undefined) ||
+    questionObj?.body as string | undefined ||
     content.body as string | undefined
   if (!question) return null
 
   const rawAnswers = (start.answers as Record<string, unknown>[] | undefined) || []
   const answers = rawAnswers.map((a) => {
+    // Stable: m.id + m.text, MSC: id + org.matrix.msc1767.text
+    const id = String(a['m.id'] ?? a.id ?? '')
+    const mText = a['m.text']
     const msc1767 = a['org.matrix.msc1767.text']
-    const msc1767Text = Array.isArray(msc1767)
-      ? (msc1767[0] as Record<string, unknown> | undefined)?.body as string | undefined
-      : (msc1767 as Record<string, unknown> | undefined)?.body as string | undefined
-    return {
-      id: String(a.id ?? ''),
-      text: msc1767Text || String(a.id ?? ''),
-    }
+    const text: string =
+      (Array.isArray(mText) ? (mText[0] as Record<string, unknown>)?.body as string : undefined) ||
+      (Array.isArray(msc1767) ? (msc1767[0] as Record<string, unknown>)?.body as string : (msc1767 as Record<string, unknown>)?.body as string) ||
+      id
+    return { id, text }
   })
 
-  const kindStr = String(start.kind ?? 'org.matrix.msc3381.poll.disclosed')
+  // Stable: m.kind = 'm.disclosed'/'m.undisclosed', MSC: kind = 'org.matrix.msc3381.poll.disclosed'
+  const kindStr = String(start['m.kind'] ?? start.kind ?? 'm.disclosed')
   const kind: 'disclosed' | 'undisclosed' = kindStr.includes('undisclosed') ? 'undisclosed' : 'disclosed'
   const maxSelections = Number(start.max_selections ?? 1)
 
@@ -1573,15 +1618,15 @@ function buildPollData(
 
     for (const ev of room.getLiveTimeline().getEvents()) {
       const evType = ev.getType()
-      if (evType === POLL_END) {
+      if (isPollEnd(evType)) {
         const rel = (ev.getContent() as Record<string, unknown>)['m.relates_to'] as Record<string, unknown> | undefined
         if (rel?.event_id === pollEventId) isClosed = true
       }
-      if (evType !== POLL_RESPONSE) continue
+      if (!isPollResponse(evType)) continue
       const c = ev.getContent() as Record<string, unknown>
       const rel = c['m.relates_to'] as Record<string, unknown> | undefined
       if (rel?.event_id !== pollEventId) continue
-      const resp = c[POLL_RESPONSE] as Record<string, unknown> | undefined
+      const resp = (c[POLL_RESPONSE] || c[POLL_RESPONSE_MSC]) as Record<string, unknown> | undefined
       const voted = (resp?.answers as string[] | undefined) || []
       const sender = ev.getSender()
       if (!sender) continue
@@ -1608,7 +1653,7 @@ function pollEventToMessage(
   event: import('matrix-js-sdk').MatrixEvent,
   roomId: string,
 ): import('../types/matrix').MessageEvent | null {
-  if (event.getType() !== POLL_START) return null
+  if (!isPollStart(event.getType())) return null
   const sender = event.getSender()
   if (!sender) return null
   const room = client?.getRoom(roomId)
@@ -1645,7 +1690,7 @@ function handlePollVoteEvent(event: import('matrix-js-sdk').MatrixEvent, roomId:
 
   const sender = event.getSender()
   if (!sender) return
-  const resp = c[POLL_RESPONSE] as Record<string, unknown> | undefined
+  const resp = (c[POLL_RESPONSE] || c[POLL_RESPONSE_MSC]) as Record<string, unknown> | undefined
   const voted = (resp?.answers as string[] | undefined) || []
   const myUserId = client?.getUserId() || ''
 
@@ -1734,7 +1779,7 @@ export async function loadInitialMessages(roomId: string): Promise<void> {
   const pendingEdits = new Map<string, MessageEvent>()
   for (const event of events) {
     const evType = event.getType()
-    if (evType === POLL_START) {
+    if (isPollStart(evType)) {
       const pollMsg = pollEventToMessage(event, roomId)
       if (pollMsg && !byId.has(pollMsg.eventId)) {
         orderedIds.push(pollMsg.eventId)
@@ -1780,11 +1825,20 @@ export async function loadInitialMessages(roomId: string): Promise<void> {
     // become available (e.g. after session verification or key backup restore).
     if (event.getType() === 'm.room.encrypted') {
       event.once(matrixSdk.MatrixEventEvent.Decrypted, () => {
+        const decryptedType = event.getType()
+        if (isPollStart(decryptedType)) {
+          const pollMsg = pollEventToMessage(event, roomId)
+          if (pollMsg) {
+            useMessageStore.getState().replaceMessage(roomId, pollMsg.eventId, pollMsg)
+            updateRoomLastMessage(roomId, pollMsg)
+          }
+          return
+        }
+        if (isPollResponse(decryptedType)) { handlePollVoteEvent(event, roomId); return }
         const decrypted = eventToMessage(event, roomId)
         if (!decrypted) return
         if (decrypted.replacesEventId) {
           applyMessageEdit(roomId, decrypted)
-          // Drop the fallback notice created before decryption for encrypted edit events.
           const decryptedEventId = event.getId()
           if (decryptedEventId) {
             useMessageStore.getState().removeMessage(roomId, decryptedEventId)
