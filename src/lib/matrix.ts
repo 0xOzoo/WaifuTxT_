@@ -1046,7 +1046,10 @@ function eventToMessage(event: MatrixEvent, roomId: string): MessageEvent | null
     const info = effectiveContent.info as Record<string, unknown> | undefined
     fileSize = typeof info?.size === 'number' ? info.size : undefined
     if (effectiveContent.file) encryptedFile = effectiveContent.file as EncryptedFileInfo
-    else if (effectiveContent.url) fileUrl = client?.mxcUrlToHttp(String(effectiveContent.url), undefined, undefined, undefined, false, true) || undefined
+    else if (effectiveContent.url) {
+      const raw = client?.mxcUrlToHttp(String(effectiveContent.url), undefined, undefined, undefined, false, true) || undefined
+      fileUrl = (raw && getMediaUrlWithAccessToken(raw)) || raw
+    }
     if (type === 'm.video') {
       if (info?.thumbnail_file) encryptedThumbnailFile = info.thumbnail_file as EncryptedFileInfo
       if (typeof info?.thumbnail_url === 'string') {
@@ -1501,18 +1504,20 @@ export async function sendPoll(
   if (!client) return
   const answerObjects = answers.map((text, i) => ({
     id: `answer_${i}`,
-    'org.matrix.msc1767.text': { body: text },
+    'org.matrix.msc1767.text': [{ body: text, mimetype: 'text/plain' }],
   }))
+  const fallbackBody = `${question}\n${answers.map((a, i) => `${i + 1}. ${a}`).join('\n')}`
   await (client as any).sendEvent(roomId, POLL_START, {
     [POLL_START]: {
-      question: { body: question, 'org.matrix.msc1767.text': { body: question } },
+      question: {
+        body: question,
+        'org.matrix.msc1767.text': [{ body: question, mimetype: 'text/plain' }],
+      },
       answers: answerObjects,
       kind: `org.matrix.msc3381.poll.${kind}`,
       max_selections: 1,
     },
-    // Plain-text fallback for unsupporting clients
-    msgtype: 'm.text',
-    body: `Sondage : ${question}\n${answers.map((a, i) => `${i + 1}. ${a}`).join('\n')}`,
+    'org.matrix.msc1767.text': [{ body: fallbackBody, mimetype: 'text/plain' }],
   })
 }
 
@@ -1536,10 +1541,16 @@ function buildPollData(
   if (!question) return null
 
   const rawAnswers = (start.answers as Record<string, unknown>[] | undefined) || []
-  const answers = rawAnswers.map((a) => ({
-    id: String(a.id ?? ''),
-    text: ((a['org.matrix.msc1767.text'] as Record<string, unknown> | undefined)?.body as string | undefined) || String(a.id ?? ''),
-  }))
+  const answers = rawAnswers.map((a) => {
+    const msc1767 = a['org.matrix.msc1767.text']
+    const msc1767Text = Array.isArray(msc1767)
+      ? (msc1767[0] as Record<string, unknown> | undefined)?.body as string | undefined
+      : (msc1767 as Record<string, unknown> | undefined)?.body as string | undefined
+    return {
+      id: String(a.id ?? ''),
+      text: msc1767Text || String(a.id ?? ''),
+    }
+  })
 
   const kindStr = String(start.kind ?? 'org.matrix.msc3381.poll.disclosed')
   const kind: 'disclosed' | 'undisclosed' = kindStr.includes('undisclosed') ? 'undisclosed' : 'disclosed'
