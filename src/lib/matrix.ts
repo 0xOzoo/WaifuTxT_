@@ -213,7 +213,28 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
     try {
       if (!room) return
       const type = event.getType()
-      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction' && type !== 'm.room.redaction') return
+      if (type !== 'm.room.message' && type !== 'm.room.encrypted' && type !== 'm.reaction' && type !== 'm.room.redaction' && type !== POLL_START && type !== POLL_RESPONSE && type !== POLL_END) return
+
+      if (type === POLL_START) {
+        const pollMsg = pollEventToMessage(event, room.roomId)
+        if (pollMsg) {
+          useMessageStore.getState().addMessage(room.roomId, pollMsg)
+          updateRoomLastMessage(room.roomId, pollMsg)
+        }
+        return
+      }
+      if (type === POLL_RESPONSE) { handlePollVoteEvent(event, room.roomId); return }
+      if (type === POLL_END) {
+        const c = event.getContent() as Record<string, unknown>
+        const rel = c['m.relates_to'] as Record<string, unknown> | undefined
+        const pollId = rel?.event_id as string | undefined
+        if (pollId) {
+          const store = useMessageStore.getState()
+          const pollMsg = store.getMessages(room.roomId).find((m) => m.eventId === pollId && m.type === 'm.poll')
+          if (pollMsg?.poll) store.replaceMessage(room.roomId, pollId, { ...pollMsg, poll: { ...pollMsg.poll, isClosed: true } })
+        }
+        return
+      }
 
       if (type === 'm.reaction') {
         useMessageStore.getState().bumpReactionsVersion()
@@ -1465,6 +1486,176 @@ export async function sendAudio(roomId: string, blob: Blob, duration?: number): 
   } as any)
 }
 
+// ── Polls (MSC3381) ───────────────────────────────────────────────────────────
+
+const POLL_START = 'org.matrix.msc3381.poll.start'
+const POLL_RESPONSE = 'org.matrix.msc3381.poll.response'
+const POLL_END = 'org.matrix.msc3381.poll.end'
+
+export async function sendPoll(
+  roomId: string,
+  question: string,
+  answers: string[],
+  kind: 'disclosed' | 'undisclosed' = 'disclosed',
+): Promise<void> {
+  if (!client) return
+  const answerObjects = answers.map((text, i) => ({
+    id: `answer_${i}`,
+    'org.matrix.msc1767.text': { body: text },
+  }))
+  await (client as any).sendEvent(roomId, POLL_START, {
+    [POLL_START]: {
+      question: { body: question, 'org.matrix.msc1767.text': { body: question } },
+      answers: answerObjects,
+      kind: `org.matrix.msc3381.poll.${kind}`,
+      max_selections: 1,
+    },
+    // Plain-text fallback for unsupporting clients
+    msgtype: 'm.text',
+    body: `Sondage : ${question}\n${answers.map((a, i) => `${i + 1}. ${a}`).join('\n')}`,
+  })
+}
+
+export async function sendPollVote(roomId: string, pollEventId: string, answerIds: string[]): Promise<void> {
+  if (!client) return
+  await (client as any).sendEvent(roomId, POLL_RESPONSE, {
+    'm.relates_to': { rel_type: 'm.reference', event_id: pollEventId },
+    [POLL_RESPONSE]: { answers: answerIds },
+  })
+}
+
+function buildPollData(
+  pollEvent: import('matrix-js-sdk').MatrixEvent,
+  roomId: string,
+): import('../types/matrix').PollData | null {
+  const content = pollEvent.getContent() as Record<string, unknown>
+  const start = (content[POLL_START] || content) as Record<string, unknown>
+  const question =
+    (start.question as Record<string, unknown> | undefined)?.body as string | undefined ||
+    content.body as string | undefined
+  if (!question) return null
+
+  const rawAnswers = (start.answers as Record<string, unknown>[] | undefined) || []
+  const answers = rawAnswers.map((a) => ({
+    id: String(a.id ?? ''),
+    text: ((a['org.matrix.msc1767.text'] as Record<string, unknown> | undefined)?.body as string | undefined) || String(a.id ?? ''),
+  }))
+
+  const kindStr = String(start.kind ?? 'org.matrix.msc3381.poll.disclosed')
+  const kind: 'disclosed' | 'undisclosed' = kindStr.includes('undisclosed') ? 'undisclosed' : 'disclosed'
+  const maxSelections = Number(start.max_selections ?? 1)
+
+  const pollEventId = pollEvent.getId() || ''
+  const room = client?.getRoom(roomId)
+  const votes: Record<string, string[]> = {}
+  for (const a of answers) votes[a.id] = []
+
+  const myUserId = client?.getUserId() || ''
+  const myVotes: string[] = []
+  let isClosed = false
+
+  // Scan existing timeline for responses
+  if (room) {
+    // Build per-user last-vote map
+    const lastVoteByUser = new Map<string, string[]>()
+    const lastVoteTs = new Map<string, number>()
+
+    for (const ev of room.getLiveTimeline().getEvents()) {
+      const evType = ev.getType()
+      if (evType === POLL_END) {
+        const rel = (ev.getContent() as Record<string, unknown>)['m.relates_to'] as Record<string, unknown> | undefined
+        if (rel?.event_id === pollEventId) isClosed = true
+      }
+      if (evType !== POLL_RESPONSE) continue
+      const c = ev.getContent() as Record<string, unknown>
+      const rel = c['m.relates_to'] as Record<string, unknown> | undefined
+      if (rel?.event_id !== pollEventId) continue
+      const resp = c[POLL_RESPONSE] as Record<string, unknown> | undefined
+      const voted = (resp?.answers as string[] | undefined) || []
+      const sender = ev.getSender()
+      if (!sender) continue
+      const ts = ev.getTs()
+      if (!lastVoteTs.has(sender) || ts > (lastVoteTs.get(sender) ?? 0)) {
+        lastVoteTs.set(sender, ts)
+        lastVoteByUser.set(sender, voted)
+      }
+    }
+
+    // Aggregate
+    for (const [sender, voted] of lastVoteByUser) {
+      for (const aid of voted) {
+        if (votes[aid]) votes[aid].push(sender)
+      }
+      if (sender === myUserId) myVotes.push(...voted)
+    }
+  }
+
+  return { question, answers, kind, maxSelections, isClosed, votes, myVotes }
+}
+
+function pollEventToMessage(
+  event: import('matrix-js-sdk').MatrixEvent,
+  roomId: string,
+): import('../types/matrix').MessageEvent | null {
+  if (event.getType() !== POLL_START) return null
+  const sender = event.getSender()
+  if (!sender) return null
+  const room = client?.getRoom(roomId)
+  const member = room?.getMember(sender)
+  const poll = buildPollData(event, roomId)
+  if (!poll) return null
+  return {
+    eventId: event.getId() || `${roomId}-${event.getTs()}`,
+    roomId,
+    sender,
+    senderName: member?.name || sender,
+    senderAvatar: member ? memberAvatarHttpUrl(member) : null,
+    content: poll.question,
+    htmlContent: null,
+    timestamp: event.getTs(),
+    type: 'm.poll',
+    replacesEventId: null,
+    replyTo: null,
+    isEdited: false,
+    poll,
+  }
+}
+
+function handlePollVoteEvent(event: import('matrix-js-sdk').MatrixEvent, roomId: string): void {
+  const c = event.getContent() as Record<string, unknown>
+  const rel = c['m.relates_to'] as Record<string, unknown> | undefined
+  const pollEventId = rel?.event_id as string | undefined
+  if (!pollEventId) return
+
+  const store = useMessageStore.getState()
+  const messages = store.getMessages(roomId)
+  const pollMsg = messages.find((m) => m.eventId === pollEventId && m.type === 'm.poll')
+  if (!pollMsg?.poll) return
+
+  const sender = event.getSender()
+  if (!sender) return
+  const resp = c[POLL_RESPONSE] as Record<string, unknown> | undefined
+  const voted = (resp?.answers as string[] | undefined) || []
+  const myUserId = client?.getUserId() || ''
+
+  // Rebuild votes: remove sender from all buckets, then re-add
+  const newVotes: Record<string, string[]> = {}
+  for (const a of pollMsg.poll.answers) {
+    newVotes[a.id] = (pollMsg.poll.votes[a.id] || []).filter((u) => u !== sender)
+  }
+  for (const aid of voted) {
+    if (newVotes[aid]) newVotes[aid] = [...newVotes[aid], sender]
+  }
+
+  const newMyVotes = sender === myUserId ? voted : pollMsg.poll.myVotes
+
+  const updated: import('../types/matrix').MessageEvent = {
+    ...pollMsg,
+    poll: { ...pollMsg.poll, votes: newVotes, myVotes: newMyVotes },
+  }
+  store.replaceMessage(roomId, pollEventId, updated)
+}
+
 export async function loadRoomHistory(roomId: string): Promise<boolean> {
   if (!client) return false
   const room = client.getRoom(roomId)
@@ -1531,7 +1722,16 @@ export async function loadInitialMessages(roomId: string): Promise<void> {
   const byId = new Map<string, MessageEvent>()
   const pendingEdits = new Map<string, MessageEvent>()
   for (const event of events) {
-    if (event.getType() !== 'm.room.message' && event.getType() !== 'm.room.encrypted') continue
+    const evType = event.getType()
+    if (evType === POLL_START) {
+      const pollMsg = pollEventToMessage(event, roomId)
+      if (pollMsg && !byId.has(pollMsg.eventId)) {
+        orderedIds.push(pollMsg.eventId)
+        byId.set(pollMsg.eventId, pollMsg)
+      }
+      continue
+    }
+    if (evType !== 'm.room.message' && evType !== 'm.room.encrypted') continue
     const msg = eventToMessage(event, roomId)
     if (msg) {
       if (msg.replacesEventId) {

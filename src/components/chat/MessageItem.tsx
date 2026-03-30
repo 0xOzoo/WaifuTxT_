@@ -16,7 +16,7 @@ import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { EmojiPicker, addRecentEmoji } from '../common/EmojiPicker'
-import type { EncryptedFileInfo, MessageEvent, RoomSummary } from '../../types/matrix'
+import type { EncryptedFileInfo, MessageEvent, RoomSummary, PollData } from '../../types/matrix'
 import { Avatar } from '../common/Avatar'
 import { UserProfileCard } from '../common/UserProfileCard'
 import { useRoomStore } from '../../stores/roomStore'
@@ -29,6 +29,7 @@ import {
   getMediaUrlWithAccessToken,
   getStoredOwnStatusMessage,
   sendEditMessage,
+  sendPollVote,
   getUrlPreview,
   loadMediaWithAuth,
   toggleReaction,
@@ -987,8 +988,109 @@ function VideoAttachment({ message }: { message: MessageEvent }) {
   )
 }
 
+// ── Poll component ────────────────────────────────────────────────────────────
+
+function PollMessage({ message, poll }: { message: MessageEvent; poll: PollData }) {
+  const session = useAuthStore((s) => s.session)
+  const replaceMessage = useMessageStore((s) => s.replaceMessage)
+  const [voting, setVoting] = useState(false)
+
+  const totalVotes = Object.values(poll.votes).reduce((s, v) => s + v.length, 0)
+
+  const handleVote = async (answerId: string) => {
+    if (poll.isClosed || voting) return
+    const already = poll.myVotes.includes(answerId)
+    const newVotes = already ? [] : [answerId]
+    setVoting(true)
+    try {
+      await sendPollVote(message.roomId, message.eventId, newVotes)
+      // Optimistic update
+      const myUserId = session?.userId ?? ''
+      const updatedVotes: Record<string, string[]> = {}
+      for (const a of poll.answers) {
+        updatedVotes[a.id] = (poll.votes[a.id] || []).filter((u) => u !== myUserId)
+      }
+      if (!already && updatedVotes[answerId]) updatedVotes[answerId] = [...updatedVotes[answerId], myUserId]
+      replaceMessage(message.roomId, message.eventId, {
+        ...message,
+        poll: { ...poll, votes: updatedVotes, myVotes: newVotes },
+      })
+    } catch { /* ignore */ } finally {
+      setVoting(false)
+    }
+  }
+
+  return (
+    <div className="mt-1 max-w-sm rounded-xl border border-border bg-bg-secondary/60 overflow-hidden">
+      {/* Header */}
+      <div className="px-4 pt-3 pb-2 flex items-start gap-2 border-b border-border/60">
+        <svg className="w-4 h-4 text-accent-pink shrink-0 mt-0.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+        <div>
+          <p className="text-sm font-semibold text-text-primary leading-snug">{poll.question}</p>
+          {poll.isClosed && <span className="text-[10px] text-danger font-medium">Sondage fermé</span>}
+        </div>
+      </div>
+
+      {/* Answers */}
+      <div className="px-3 py-2 space-y-1.5">
+        {poll.answers.map((answer) => {
+          const count = (poll.votes[answer.id] || []).length
+          const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0
+          const isSelected = poll.myVotes.includes(answer.id)
+
+          return (
+            <button
+              key={answer.id}
+              onClick={() => void handleVote(answer.id)}
+              disabled={poll.isClosed || voting}
+              className={[
+                'relative w-full rounded-lg px-3 py-2 text-left text-sm transition-all duration-150 overflow-hidden cursor-pointer',
+                'disabled:cursor-not-allowed',
+                isSelected
+                  ? 'border border-accent-pink/60 text-accent-pink'
+                  : 'border border-border hover:border-border-strong text-text-primary hover:bg-bg-hover/40',
+              ].join(' ')}
+            >
+              {/* Progress bar background */}
+              {poll.kind === 'disclosed' && totalVotes > 0 && (
+                <span
+                  className={`absolute inset-0 rounded-lg transition-all duration-300 ${isSelected ? 'bg-accent-pink/12' : 'bg-bg-hover/60'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              )}
+              <span className="relative flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2">
+                  {isSelected && (
+                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                    </svg>
+                  )}
+                  {answer.text}
+                </span>
+                {poll.kind === 'disclosed' && (
+                  <span className="text-xs text-text-muted shrink-0">{pct}%</span>
+                )}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Footer */}
+      <div className="px-4 pb-3 text-xs text-text-muted">
+        {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
+        {poll.myVotes.length > 0 && !poll.isClosed && (
+          <span className="ml-2 text-accent-pink">• Votre vote est enregistré</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function MessageItem({ message, showHeader }: MessageItemProps) {
-  const isMediaType = message.type === 'm.image' || message.type === 'm.video' || message.type === 'm.audio' || message.type === 'm.file'
+  const isMediaType = message.type === 'm.image' || message.type === 'm.video' || message.type === 'm.audio' || message.type === 'm.file' || message.type === 'm.poll'
   const urls = extractUrls(message.content)
   const contentWithoutUrls = removeUrlsFromText(message.content)
   const renderContent = useMemo(
@@ -1299,6 +1401,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
         {message.type === 'm.video' && (message.fileUrl || message.encryptedFile) && <VideoAttachment message={message} />}
         {message.type === 'm.audio' && (message.fileUrl || message.encryptedFile) && <AudioAttachment message={message} />}
         {message.type === 'm.file' && (message.fileUrl || message.encryptedFile) && <FileAttachment message={message} />}
+        {message.type === 'm.poll' && message.poll && <PollMessage message={message} poll={message.poll} />}
 
         {(message.type === 'm.text' || message.type === 'm.notice' || message.type === 'm.emote') && (
           <>

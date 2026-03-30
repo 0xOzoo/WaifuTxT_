@@ -13,7 +13,7 @@ import emojibaseData from 'emojibase-data/en/data.json'
 import { useRoomStore } from '../../stores/roomStore'
 import { useUiStore } from '../../stores/uiStore'
 import { useAuthStore } from '../../stores/authStore'
-import { sendMessage, sendFile, sendImage, sendAudio, sendTyping } from '../../lib/matrix'
+import { sendMessage, sendFile, sendImage, sendAudio, sendTyping, sendPoll } from '../../lib/matrix'
 import { Avatar } from '../common/Avatar'
 import type { RoomMember, RoomSummary } from '../../types/matrix'
 import { EmojiPicker, addRecentEmoji } from '../common/EmojiPicker'
@@ -170,6 +170,14 @@ export function MessageInput() {
 
   const [isRecording, setIsRecording] = useState(false)
   const [recordingDuration, setRecordingDuration] = useState(0)
+  const [recordingLevel, setRecordingLevel] = useState(0) // 0-100 for waveform
+
+  // Poll modal state
+  const [showPollModal, setShowPollModal] = useState(false)
+  const [pollQuestion, setPollQuestion] = useState('')
+  const [pollAnswers, setPollAnswers] = useState(['', ''])
+  const [pollKind, setPollKind] = useState<'disclosed' | 'undisclosed'>('disclosed')
+  const [isSendingPoll, setIsSendingPoll] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -181,6 +189,7 @@ export function MessageInput() {
   const emojiBtnRef = useRef<HTMLButtonElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recordingVADRef = useRef<{ ctx: AudioContext; interval: ReturnType<typeof setInterval> } | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const recordingStartRef = useRef<number>(0)
 
@@ -558,10 +567,40 @@ export function MessageInput() {
       recordingTimerRef.current = setInterval(() => {
         setRecordingDuration(Math.floor((Date.now() - recordingStartRef.current) / 1000))
       }, 500)
+      // Waveform level meter
+      try {
+        const ctx = new AudioContext()
+        const src = ctx.createMediaStreamSource(stream)
+        const analyser = ctx.createAnalyser()
+        analyser.fftSize = 256
+        analyser.smoothingTimeConstant = 0.5
+        src.connect(analyser)
+        const data = new Float32Array(analyser.frequencyBinCount)
+        const interval = setInterval(() => {
+          analyser.getFloatFrequencyData(data)
+          let sum = 0
+          for (let i = 0; i < data.length; i++) {
+            const lin = Math.pow(10, data[i] / 20)
+            sum += lin * lin
+          }
+          const db = 10 * Math.log10((sum / data.length) || 1e-12)
+          setRecordingLevel(Math.max(0, Math.min(100, ((db + 60) / 60) * 100)))
+        }, 80)
+        recordingVADRef.current = { ctx, interval }
+      } catch { /* ignore if AudioContext fails */ }
     } catch {
       // permission denied or not available
     }
   }, [activeRoomId])
+
+  const stopRecordingVAD = useCallback(() => {
+    if (recordingVADRef.current) {
+      clearInterval(recordingVADRef.current.interval)
+      recordingVADRef.current.ctx.close().catch(() => {})
+      recordingVADRef.current = null
+    }
+    setRecordingLevel(0)
+  }, [])
 
   const stopRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current
@@ -575,10 +614,11 @@ export function MessageInput() {
     }
     recorder.stop()
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
+    stopRecordingVAD()
     mediaRecorderRef.current = null
     setIsRecording(false)
     setRecordingDuration(0)
-  }, [activeRoomId])
+  }, [activeRoomId, stopRecordingVAD])
 
   const cancelRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current
@@ -589,10 +629,11 @@ export function MessageInput() {
     }
     recorder.stop()
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
+    stopRecordingVAD()
     mediaRecorderRef.current = null
     setIsRecording(false)
     setRecordingDuration(0)
-  }, [])
+  }, [stopRecordingVAD])
 
   const handlePaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     if (!activeRoomId) return
@@ -655,6 +696,23 @@ export function MessageInput() {
       setPendingReply(null)
     }
   }, [activeRoomId, pendingReply, setPendingReply])
+
+  const handleSendPoll = useCallback(async () => {
+    if (!activeRoomId) return
+    const question = pollQuestion.trim()
+    const answers = pollAnswers.map((a) => a.trim()).filter(Boolean)
+    if (!question || answers.length < 2) return
+    setIsSendingPoll(true)
+    try {
+      await sendPoll(activeRoomId, question, answers, pollKind)
+      setShowPollModal(false)
+      setPollQuestion('')
+      setPollAnswers(['', ''])
+      setPollKind('disclosed')
+    } catch { /* ignore */ } finally {
+      setIsSendingPoll(false)
+    }
+  }, [activeRoomId, pollQuestion, pollAnswers, pollKind])
 
   if (!activeRoomId) return null
 
@@ -784,6 +842,7 @@ export function MessageInput() {
             <button
               onClick={() => fileInputRef.current?.click()}
               className="p-3 text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+              title="Joindre un fichier"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -795,27 +854,50 @@ export function MessageInput() {
               className="hidden"
               onChange={handleFileUpload}
             />
+            <button
+              onClick={() => setShowPollModal(true)}
+              className="p-3 text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+              title="Créer un sondage"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+            </button>
           </>
         )}
         {isRecording ? (
-          <div className="flex flex-1 items-center gap-3 px-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
-            <span className="text-sm text-text-primary tabular-nums">
+          <div className="flex flex-1 items-center gap-2 px-3">
+            <span className="w-2 h-2 rounded-full bg-danger animate-pulse shrink-0" />
+            <span className="text-xs text-danger tabular-nums font-medium shrink-0">
               {`${Math.floor(recordingDuration / 60)}:${String(recordingDuration % 60).padStart(2, '0')}`}
             </span>
-            <span className="flex-1 text-sm text-text-muted">Enregistrement en cours...</span>
+            {/* Waveform visualizer */}
+            <div className="flex-1 flex items-center gap-px h-8 overflow-hidden">
+              {Array.from({ length: 28 }).map((_, i) => {
+                const phase = (i / 28) * Math.PI * 2
+                const base = 15 + 10 * Math.sin(phase + Date.now() / 400)
+                const bar = Math.max(8, Math.min(90, recordingLevel * (0.4 + 0.6 * Math.abs(Math.sin(phase))) + base * 0.3))
+                return (
+                  <div
+                    key={i}
+                    className="flex-1 rounded-full bg-danger/70 transition-all duration-75"
+                    style={{ height: `${bar}%` }}
+                  />
+                )
+              })}
+            </div>
             <button
               onClick={cancelRecording}
-              className="p-2 text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+              className="p-2 text-text-muted hover:text-danger transition-colors cursor-pointer shrink-0"
               title="Annuler"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
             <button
               onClick={stopRecording}
-              className="p-2 text-accent-pink hover:text-accent-pink-hover transition-colors cursor-pointer"
+              className="p-2 text-accent-pink hover:text-accent-pink-hover transition-colors cursor-pointer shrink-0"
               title="Envoyer le message vocal"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -917,6 +999,100 @@ export function MessageInput() {
           </>
         )}
       </div>
+
+      {/* ── Poll creation modal ───────────────────────────────────────────── */}
+      {showPollModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px]" onClick={() => setShowPollModal(false)}>
+          <div className="w-full max-w-md rounded-2xl border border-border bg-bg-secondary shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-text-primary">Créer un sondage</h3>
+              <button onClick={() => setShowPollModal(false)} className="text-text-muted hover:text-text-primary cursor-pointer p-1">×</button>
+            </div>
+
+            {/* Question */}
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Question</label>
+              <input
+                autoFocus
+                value={pollQuestion}
+                onChange={(e) => setPollQuestion(e.target.value)}
+                placeholder="Posez votre question..."
+                className="w-full rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-pink"
+                maxLength={200}
+              />
+            </div>
+
+            {/* Answers */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-text-secondary uppercase tracking-wider">Réponses</label>
+              {pollAnswers.map((answer, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    value={answer}
+                    onChange={(e) => {
+                      const next = [...pollAnswers]
+                      next[i] = e.target.value
+                      setPollAnswers(next)
+                    }}
+                    placeholder={`Option ${i + 1}`}
+                    className="flex-1 rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-pink"
+                    maxLength={100}
+                  />
+                  {pollAnswers.length > 2 && (
+                    <button
+                      onClick={() => setPollAnswers(pollAnswers.filter((_, j) => j !== i))}
+                      className="p-2 text-text-muted hover:text-danger transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              ))}
+              {pollAnswers.length < 5 && (
+                <button
+                  onClick={() => setPollAnswers([...pollAnswers, ''])}
+                  className="text-xs text-accent-pink hover:text-accent-pink-hover transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Ajouter une option
+                </button>
+              )}
+            </div>
+
+            {/* Kind */}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-text-secondary">Afficher les résultats en direct</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={pollKind === 'disclosed'}
+                onClick={() => setPollKind(pollKind === 'disclosed' ? 'undisclosed' : 'disclosed')}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${pollKind === 'disclosed' ? 'bg-accent-pink' : 'bg-bg-hover'}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${pollKind === 'disclosed' ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
+            {/* Submit */}
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setShowPollModal(false)} className="px-4 py-2 rounded-lg text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors cursor-pointer">
+                Annuler
+              </button>
+              <button
+                onClick={() => void handleSendPoll()}
+                disabled={isSendingPoll || !pollQuestion.trim() || pollAnswers.filter((a) => a.trim()).length < 2}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-accent-pink hover:bg-accent-pink-hover text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSendingPoll ? 'Envoi...' : 'Créer le sondage'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

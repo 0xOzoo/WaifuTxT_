@@ -36,6 +36,23 @@ export interface EncryptedFileInfo {
   v: string
 }
 
+export interface PollAnswer {
+  id: string
+  text: string
+}
+
+export interface PollData {
+  question: string
+  answers: PollAnswer[]
+  kind: 'disclosed' | 'undisclosed'
+  maxSelections: number
+  isClosed: boolean
+  /** answerId → list of userIds who voted for it (last vote per user wins) */
+  votes: Record<string, string[]>
+  /** answer IDs selected by the current user */
+  myVotes: string[]
+}
+
 export interface MessageEvent {
   eventId: string
   roomId: string
@@ -45,7 +62,7 @@ export interface MessageEvent {
   content: string
   htmlContent: string | null
   timestamp: number
-  type: 'm.text' | 'm.image' | 'm.file' | 'm.video' | 'm.audio' | 'm.notice' | 'm.emote'
+  type: 'm.text' | 'm.image' | 'm.file' | 'm.video' | 'm.audio' | 'm.notice' | 'm.emote' | 'm.poll'
   replacesEventId?: string | null
   replyTo: string | null
   isEdited: boolean
@@ -57,6 +74,7 @@ export interface MessageEvent {
   fileSize?: number
   encryptedFile?: EncryptedFileInfo
   encryptedThumbnailFile?: EncryptedFileInfo
+  poll?: PollData
 }
 
 export interface RoomMember {
