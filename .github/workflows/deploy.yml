@@ -76,24 +76,84 @@ jobs:
     steps:
       - name: 🟢 Notification Matrix (Succès)
         if: ${{ needs.build.result == 'success' && needs.deploy.result == 'success' }}
-        uses: cbrgm/matrix-message-action@v2
-        with:
-          homeserver: ${{ secrets.MATRIX_HOMESERVER }}
-          token: ${{ secrets.MATRIX_TOKEN }}
-          room: ${{ secrets.MATRIX_ROOM_ID }}
-          message: |
-            ✅ **Déploiement [Prod] Réussi !**
-            Le code de **${{ github.actor }}** a été mis en ligne avec succès.
-            📝 Commit : ${{ github.event.head_commit.message }}
+        env:
+          MATRIX_HOMESERVER: ${{ secrets.MATRIX_HOMESERVER }}
+          MATRIX_USERNAME: ${{ secrets.MATRIX_USERNAME }}
+          MATRIX_PASSWORD: ${{ secrets.MATRIX_PASSWORD }}
+          MATRIX_ROOM_ID: ${{ secrets.MATRIX_ROOM_ID }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -e
+          # 1. LOGIN : Récupération d'un token tout neuf
+          LOGIN_BODY=$(jq -n \
+            --arg user "$MATRIX_USERNAME" \
+            --arg pass "$MATRIX_PASSWORD" \
+            '{type:"m.login.password", identifier:{type:"m.id.user", user:$user}, password:$pass}')
+          LOGIN_RESP=$(curl -s -X POST "$MATRIX_HOMESERVER/_matrix/client/v3/login" \
+            -H "Content-Type: application/json" \
+            -d "$LOGIN_BODY")
+          TOKEN=$(echo "$LOGIN_RESP" | jq -r .access_token)
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
+            echo "❌ Échec de la connexion Matrix. Vérifiez les identifiants."
+            exit 1
+          fi
+
+          # 2. NOTIFY : Envoi du message avec un ID de transaction unique
+          TXN_ID=$(date +%s%N)
+          BODY_TEXT=$(printf '✅ Déploiement [Prod] Réussi !\nLe code de %s a été mis en ligne avec succès.\n📝 Commit : %s' "$ACTOR" "$COMMIT_MSG")
+          BODY_HTML=$(printf '✅ <strong>Déploiement [Prod] Réussi !</strong><br>Le code de <strong>%s</strong> a été mis en ligne avec succès.<br>📝 Commit : %s' "$ACTOR" "$COMMIT_MSG")
+          PAYLOAD=$(jq -n \
+            --arg body "$BODY_TEXT" \
+            --arg fbody "$BODY_HTML" \
+            '{msgtype:"m.text", format:"org.matrix.custom.html", body:$body, formatted_body:$fbody}')
+          curl -s -X PUT "$MATRIX_HOMESERVER/_matrix/client/v3/rooms/$MATRIX_ROOM_ID/send/m.room.message/$TXN_ID" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
+
+          # 3. LOGOUT : Destruction de la session (CRITIQUE)
+          curl -s -X POST "$MATRIX_HOMESERVER/_matrix/client/v3/logout" \
+            -H "Authorization: Bearer $TOKEN"
 
       - name: 🔴 Notification Matrix (Échec)
         if: ${{ needs.build.result == 'failure' || needs.deploy.result == 'failure' }}
-        uses: cbrgm/matrix-message-action@v2
-        with:
-          homeserver: ${{ secrets.MATRIX_HOMESERVER }}
-          token: ${{ secrets.MATRIX_TOKEN }}
-          room: ${{ secrets.MATRIX_ROOM_ID }}
-          message: |
-            ❌ **Échec du déploiement [Prod] !**
-            Une erreur est survenue lors de l'intégration du code de **${{ github.actor }}**.
-            🔍 Allez vérifier les logs : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          MATRIX_HOMESERVER: ${{ secrets.MATRIX_HOMESERVER }}
+          MATRIX_USERNAME: ${{ secrets.MATRIX_USERNAME }}
+          MATRIX_PASSWORD: ${{ secrets.MATRIX_PASSWORD }}
+          MATRIX_ROOM_ID: ${{ secrets.MATRIX_ROOM_ID }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          # 1. LOGIN
+          LOGIN_BODY=$(jq -n \
+            --arg user "$MATRIX_USERNAME" \
+            --arg pass "$MATRIX_PASSWORD" \
+            '{type:"m.login.password", identifier:{type:"m.id.user", user:$user}, password:$pass}')
+          LOGIN_RESP=$(curl -s -X POST "$MATRIX_HOMESERVER/_matrix/client/v3/login" \
+            -H "Content-Type: application/json" \
+            -d "$LOGIN_BODY")
+          TOKEN=$(echo "$LOGIN_RESP" | jq -r .access_token)
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
+            echo "❌ Échec de la connexion Matrix. Vérifiez les identifiants."
+            exit 1
+          fi
+
+          # 2. NOTIFY
+          TXN_ID=$(date +%s%N)
+          BODY_TEXT=$(printf '❌ Échec du déploiement [Prod] !\nUne erreur est survenue lors de l’intégration du code de %s.\n🔍 Logs : %s' "$ACTOR" "$RUN_URL")
+          BODY_HTML=$(printf '❌ <strong>Échec du déploiement [Prod] !</strong><br>Une erreur est survenue lors de l’intégration du code de <strong>%s</strong>.<br>🔍 <a href="%s">Vérifier les logs du run</a>' "$ACTOR" "$RUN_URL")
+          PAYLOAD=$(jq -n \
+            --arg body "$BODY_TEXT" \
+            --arg fbody "$BODY_HTML" \
+            '{msgtype:"m.text", format:"org.matrix.custom.html", body:$body, formatted_body:$fbody}')
+          curl -s -X PUT "$MATRIX_HOMESERVER/_matrix/client/v3/rooms/$MATRIX_ROOM_ID/send/m.room.message/$TXN_ID" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD"
+
+          # 3. LOGOUT
+          curl -s -X POST "$MATRIX_HOMESERVER/_matrix/client/v3/logout" \
+            -H "Authorization: Bearer $TOKEN"
