@@ -7,6 +7,15 @@ import { getSteamStatus, type SteamStatus } from '../../lib/steamPresence'
 
 const CARD_WIDTH = 320
 
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+}
+
 export function UserProfileCard({
   open,
   anchorRef,
@@ -33,22 +42,35 @@ export function UserProfileCard({
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null)
   const [dmLoading, setDmLoading] = useState(false)
   const [steamStatus, setSteamStatus] = useState<SteamStatus | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const [iconBroken, setIconBroken] = useState(false)
   const setPendingMention = useUiStore((s) => s.setPendingMention)
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
 
   useEffect(() => {
     if (!open) {
       setSteamStatus(null)
+      setIconBroken(false)
       return
     }
     let cancelled = false
     getSteamStatus(userId).then((s) => {
-      if (!cancelled) setSteamStatus(s)
+      if (!cancelled) {
+        setSteamStatus(s)
+        setIconBroken(false)
+      }
     })
     return () => {
       cancelled = true
     }
   }, [open, userId])
+
+  useEffect(() => {
+    if (!open || !steamStatus?.since) return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [open, steamStatus?.since])
 
   useEffect(() => {
     if (!open) return
@@ -160,12 +182,32 @@ export function UserProfileCard({
         ) : null}
 
         {steamStatus?.game ? (
-          <div className="mt-2 flex items-center gap-2 border-t border-border/60 pt-2">
-            <span className="w-2 h-2 rounded-full shrink-0 bg-success" />
-            <span className="text-xs text-text-muted">En train de jouer à</span>
-            <span className="text-xs font-semibold text-text-primary truncate">
-              {steamStatus.game}
-            </span>
+          <div className="mt-2 border-t border-border/60 pt-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1.5">
+              En train de jouer
+            </p>
+            <div className="flex items-center gap-2.5">
+              {steamStatus.gameId && !iconBroken ? (
+                <img
+                  src={`https://cdn.cloudflare.steamstatic.com/steam/apps/${steamStatus.gameId}/capsule_184x69.jpg`}
+                  alt=""
+                  className="w-[74px] h-[28px] rounded object-cover shrink-0 border border-border/60"
+                  onError={() => setIconBroken(true)}
+                />
+              ) : (
+                <span className="w-2 h-2 rounded-full shrink-0 bg-success" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-text-primary truncate">
+                  {steamStatus.game}
+                </p>
+                {steamStatus.since ? (
+                  <p className="text-[11px] text-text-muted font-mono tabular-nums">
+                    {formatElapsed(now - steamStatus.since)} écoulé
+                  </p>
+                ) : null}
+              </div>
+            </div>
           </div>
         ) : null}
 
