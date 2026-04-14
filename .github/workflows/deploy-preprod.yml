@@ -95,7 +95,13 @@ jobs:
             -d "$LOGIN_BODY")
           TOKEN=$(echo "$LOGIN_RESP" | jq -r .access_token)
           if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "❌ Échec de la connexion Matrix. Vérifiez les identifiants."
+            ERRCODE=$(echo "$LOGIN_RESP" | jq -r '.errcode // "UNKNOWN"')
+            ERRMSG=$(echo "$LOGIN_RESP" | jq -r '.error // "no error field"')
+            RETRY_MS=$(echo "$LOGIN_RESP" | jq -r '.retry_after_ms // "n/a"')
+            echo "❌ Échec de la connexion Matrix."
+            echo "   errcode       : $ERRCODE"
+            echo "   error         : $ERRMSG"
+            echo "   retry_after_ms: $RETRY_MS"
             exit 1
           fi
 
@@ -137,7 +143,13 @@ jobs:
             -d "$LOGIN_BODY")
           TOKEN=$(echo "$LOGIN_RESP" | jq -r .access_token)
           if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "❌ Échec de la connexion Matrix. Vérifiez les identifiants."
+            ERRCODE=$(echo "$LOGIN_RESP" | jq -r '.errcode // "UNKNOWN"')
+            ERRMSG=$(echo "$LOGIN_RESP" | jq -r '.error // "no error field"')
+            RETRY_MS=$(echo "$LOGIN_RESP" | jq -r '.retry_after_ms // "n/a"')
+            echo "❌ Échec de la connexion Matrix."
+            echo "   errcode       : $ERRCODE"
+            echo "   error         : $ERRMSG"
+            echo "   retry_after_ms: $RETRY_MS"
             exit 1
           fi
 
