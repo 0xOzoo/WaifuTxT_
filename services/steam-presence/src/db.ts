@@ -26,11 +26,18 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS pending_links (
-    nonce          TEXT PRIMARY KEY,
-    matrix_user_id TEXT NOT NULL,
-    created_at     INTEGER NOT NULL
+    nonce           TEXT PRIMARY KEY,
+    matrix_user_id  TEXT NOT NULL,
+    frontend_origin TEXT,
+    created_at      INTEGER NOT NULL
   );
 `)
+
+try {
+  db.exec(`ALTER TABLE pending_links ADD COLUMN frontend_origin TEXT`)
+} catch {
+  // column already exists on an older DB; nothing to do
+}
 
 export type LinkRow = {
   matrix_user_id: string
@@ -49,7 +56,7 @@ export type StatusRow = {
 
 export const stmts = {
   insertPending: db.prepare(
-    'INSERT OR REPLACE INTO pending_links (nonce, matrix_user_id, created_at) VALUES (?, ?, ?)',
+    'INSERT OR REPLACE INTO pending_links (nonce, matrix_user_id, frontend_origin, created_at) VALUES (?, ?, ?, ?)',
   ),
   takePending: db.prepare('SELECT * FROM pending_links WHERE nonce = ?'),
   deletePending: db.prepare('DELETE FROM pending_links WHERE nonce = ?'),

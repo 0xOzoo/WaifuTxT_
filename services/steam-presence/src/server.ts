@@ -12,7 +12,11 @@ const PENDING_TTL_MS = 15 * 60 * 1000
 const app = Fastify({ logger: true })
 
 await app.register(cors, {
-  origin: config.allowedOrigin,
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true)
+    if (config.allowedOrigins.includes(origin.replace(/\/+$/, ''))) return cb(null, true)
+    return cb(new Error('Origin not allowed'), false)
+  },
   credentials: false,
   methods: ['GET', 'POST', 'DELETE'],
 })
@@ -34,10 +38,15 @@ app.post('/steam/link/start', async (req, reply) => {
   const matrixUserId = await verifyMatrixToken(token)
   if (!matrixUserId) return reply.code(401).send({ error: 'invalid_matrix_token' })
 
+  const rawOrigin = (req.headers.origin ?? '').replace(/\/+$/, '')
+  const frontendOrigin = config.allowedOrigins.includes(rawOrigin)
+    ? rawOrigin
+    : config.frontendUrl
+
   stmts.purgePending.run(Date.now() - PENDING_TTL_MS)
 
   const nonce = randomBytes(24).toString('base64url')
-  stmts.insertPending.run(nonce, matrixUserId, Date.now())
+  stmts.insertPending.run(nonce, matrixUserId, frontendOrigin, Date.now())
 
   const returnTo = `${config.publicBaseUrl}/steam/callback?nonce=${encodeURIComponent(nonce)}`
   const realm = new URL(config.publicBaseUrl).origin
@@ -54,20 +63,22 @@ app.get<{ Querystring: Record<string, string> }>('/steam/callback', async (req, 
   if (!nonce) return reply.redirect(`${config.frontendUrl}?steam=error&reason=missing_nonce`)
 
   const pending = stmts.takePending.get(nonce) as
-    | { nonce: string; matrix_user_id: string; created_at: number }
+    | { nonce: string; matrix_user_id: string; frontend_origin: string | null; created_at: number }
     | undefined
   if (!pending || pending.created_at < Date.now() - PENDING_TTL_MS) {
     return reply.redirect(`${config.frontendUrl}?steam=error&reason=expired_nonce`)
   }
   stmts.deletePending.run(nonce)
 
+  const targetFrontend = pending.frontend_origin ?? config.frontendUrl
+
   const steamId = await verifySteamAssertion(q)
   if (!steamId) {
-    return reply.redirect(`${config.frontendUrl}?steam=error&reason=invalid_assertion`)
+    return reply.redirect(`${targetFrontend}?steam=error&reason=invalid_assertion`)
   }
 
   stmts.upsertLink.run(pending.matrix_user_id, steamId, Date.now())
-  return reply.redirect(`${config.frontendUrl}?steam=linked`)
+  return reply.redirect(`${targetFrontend}?steam=linked`)
 })
 
 /**
