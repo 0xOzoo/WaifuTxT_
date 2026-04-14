@@ -5,6 +5,7 @@ import { Avatar } from './Avatar'
 import { useUiStore } from '../../stores/uiStore'
 import { useRoomStore } from '../../stores/roomStore'
 import { getOrCreateDmRoom, getUserBannerUrl, getUserStatusMessage, getUserBio } from '../../lib/matrix'
+import { getSteamStatus, type SteamStatus } from '../../lib/steamPresence'
 
 const CARD_WIDTH = 320
 
@@ -21,7 +22,7 @@ export function UserProfileCard({
   open,
   anchorRef,
   onClose,
-  displayName,https://github.com/Otherside410/WaifuTxT_/pull/42/conflict?name=.github%252Fworkflows%252Fdeploy.yml&ancestor_oid=611d35cb8bb304b09cf3385da925521f716ac1dc&base_oid=07c8b104a2b01bbfb39fc6bc3485bf6e12769f90&head_oid=df1013208235e8286ac97b55b92a885a314c556f
+  displayName,
   userId,
   avatarUrl,
   presence,
@@ -45,22 +46,36 @@ export function UserProfileCard({
   const [bannerUrl, setBannerUrl] = useState<string | null>(null)
   const [profileStatusMsg, setProfileStatusMsg] = useState<string | null>(null)
   const [bio, setBio] = useState<string | null>(null)
+  const [steamStatus, setSteamStatus] = useState<SteamStatus | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const [iconBroken, setIconBroken] = useState(false)
   const setPendingMention = useUiStore((s) => s.setPendingMention)
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
 
   useEffect(() => {
     if (!open) {
       setSteamStatus(null)
+      setIconBroken(false)
       return
     }
     let cancelled = false
     getSteamStatus(userId).then((s) => {
-      if (!cancelled) setSteamStatus(s)
+      if (!cancelled) {
+        setSteamStatus(s)
+        setIconBroken(false)
+      }
     })
     return () => {
       cancelled = true
     }
   }, [open, userId])
+
+  useEffect(() => {
+    if (!open || !steamStatus?.since) return
+    setNow(Date.now())
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [open, steamStatus?.since])
 
   useEffect(() => {
     if (!open) return
@@ -142,6 +157,7 @@ export function UserProfileCard({
   const role = powerLevel >= 100 ? 'Admin' : powerLevel >= 50 ? 'Modérateur' : 'Membre'
   const statusLabel =
     presence === 'online' ? 'En ligne' : presence === 'unavailable' ? 'Absent' : 'Hors ligne'
+  const effectiveStatusMessage = statusMessage?.trim() || profileStatusMsg
 
   return (
     <div
@@ -181,10 +197,40 @@ export function UserProfileCard({
           <span className="text-xs text-text-secondary">{role}</span>
         </div>
 
-        {(statusMessage?.trim() || profileStatusMsg) ? (
+        {effectiveStatusMessage ? (
           <p className="mt-2 text-xs font-semibold text-text-secondary leading-snug line-clamp-3 border-t border-border/60 pt-2">
-            {statusMessage?.trim() || profileStatusMsg}
+            {effectiveStatusMessage}
           </p>
+        ) : null}
+
+        {steamStatus?.game ? (
+          <div className="mt-2 border-t border-border/60 pt-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1.5">
+              En train de jouer
+            </p>
+            <div className="flex items-center gap-2.5">
+              {steamStatus.gameId && !iconBroken ? (
+                <img
+                  src={`https://cdn.cloudflare.steamstatic.com/steam/apps/${steamStatus.gameId}/capsule_184x69.jpg`}
+                  alt=""
+                  className="w-[74px] h-[28px] rounded object-cover shrink-0 border border-border/60"
+                  onError={() => setIconBroken(true)}
+                />
+              ) : (
+                <span className="w-2 h-2 rounded-full shrink-0 bg-success" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-text-primary truncate">
+                  {steamStatus.game}
+                </p>
+                {steamStatus.since ? (
+                  <p className="text-[11px] text-text-muted font-mono tabular-nums">
+                    {formatElapsed(now - steamStatus.since)} écoulé
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {bio ? (
