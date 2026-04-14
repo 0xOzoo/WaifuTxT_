@@ -12,7 +12,7 @@ export function UserProfileCard({
   open,
   anchorRef,
   onClose,
-  displayName,
+  displayName,https://github.com/Otherside410/WaifuTxT_/pull/42/conflict?name=.github%252Fworkflows%252Fdeploy.yml&ancestor_oid=611d35cb8bb304b09cf3385da925521f716ac1dc&base_oid=07c8b104a2b01bbfb39fc6bc3485bf6e12769f90&head_oid=df1013208235e8286ac97b55b92a885a314c556f
   userId,
   avatarUrl,
   presence,
@@ -38,6 +38,20 @@ export function UserProfileCard({
   const [bio, setBio] = useState<string | null>(null)
   const setPendingMention = useUiStore((s) => s.setPendingMention)
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
+
+  useEffect(() => {
+    if (!open) {
+      setSteamStatus(null)
+      return
+    }
+    let cancelled = false
+    getSteamStatus(userId).then((s) => {
+      if (!cancelled) setSteamStatus(s)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open, userId])
 
   useEffect(() => {
     if (!open) return
