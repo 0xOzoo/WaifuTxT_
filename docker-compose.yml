@@ -7,6 +7,9 @@ services:
       - "8082:3000"
     depends_on:
       - steam-presence
+    networks:
+      - shared-steam
+      - default
 
   steam-presence:
     build: ./services/steam-presence
@@ -25,6 +28,13 @@ services:
       - steam-presence-data:/data
     ports:
       - "8083:3000"
+    networks:
+      - shared-steam
+      - default
 
 volumes:
   steam-presence-data:
+
+networks:
+  shared-steam:
+    external: true
