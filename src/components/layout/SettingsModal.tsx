@@ -12,6 +12,7 @@ import { ProfileAvatarUpload } from '../settings/ProfileAvatarUpload'
 import { ProfileBannerUpload } from '../settings/ProfileBannerUpload'
 import { ProfileStatusSettings } from '../settings/ProfileStatusSettings'
 import { ProfileBioSettings } from '../settings/ProfileBioSettings'
+import { SteamLinkSettings } from '../settings/SteamLinkSettings'
 import { CustomizationSettings } from '../settings/CustomizationSettings'
 import { AudioSettings } from '../settings/AudioSettings'
 import { WAIFU_OPTIONS, getWaifuById } from '../../lib/waifu'
@@ -585,6 +586,7 @@ export function SettingsModal() {
                   <ProfileBannerUpload disabled={!session} />
                   <ProfileStatusSettings disabled={!session} />
                   <ProfileBioSettings disabled={!session} />
+                  <SteamLinkSettings disabled={!session} />
                 </div>
               </div>
             </div>
