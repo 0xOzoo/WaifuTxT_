@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Avatar } from './Avatar'
 import { useUiStore } from '../../stores/uiStore'
 import { useRoomStore } from '../../stores/roomStore'
-import { getOrCreateDmRoom } from '../../lib/matrix'
-import { getSteamStatus, type SteamStatus } from '../../lib/steamPresence'
+import { getOrCreateDmRoom, getUserBannerUrl, getUserStatusMessage, getUserBio } from '../../lib/matrix'
 
 const CARD_WIDTH = 320
 
@@ -11,7 +12,7 @@ export function UserProfileCard({
   open,
   anchorRef,
   onClose,
-  displayName,
+  displayName,https://github.com/Otherside410/WaifuTxT_/pull/42/conflict?name=.github%252Fworkflows%252Fdeploy.yml&ancestor_oid=611d35cb8bb304b09cf3385da925521f716ac1dc&base_oid=07c8b104a2b01bbfb39fc6bc3485bf6e12769f90&head_oid=df1013208235e8286ac97b55b92a885a314c556f
   userId,
   avatarUrl,
   presence,
@@ -32,7 +33,9 @@ export function UserProfileCard({
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null)
   const [dmLoading, setDmLoading] = useState(false)
-  const [steamStatus, setSteamStatus] = useState<SteamStatus | null>(null)
+  const [bannerUrl, setBannerUrl] = useState<string | null>(null)
+  const [profileStatusMsg, setProfileStatusMsg] = useState<string | null>(null)
+  const [bio, setBio] = useState<string | null>(null)
   const setPendingMention = useUiStore((s) => s.setPendingMention)
   const setActiveRoom = useRoomStore((s) => s.setActiveRoom)
 
@@ -48,6 +51,16 @@ export function UserProfileCard({
     return () => {
       cancelled = true
     }
+  }, [open, userId])
+
+  useEffect(() => {
+    if (!open) return
+    setBannerUrl(null)
+    setProfileStatusMsg(null)
+    setBio(null)
+    getUserBannerUrl(userId).then(setBannerUrl).catch(() => null)
+    getUserStatusMessage(userId).then(setProfileStatusMsg).catch(() => null)
+    getUserBio(userId).then(setBio).catch(() => null)
   }, [open, userId])
 
   useEffect(() => {
@@ -128,7 +141,13 @@ export function UserProfileCard({
       style={{ top: coords.top, left: coords.left, width: CARD_WIDTH }}
     >
       {/* Banner */}
-      <div className="h-16 bg-gradient-to-r from-purple-500/80 to-accent-pink/70" />
+      {bannerUrl ? (
+        <div className="h-20 overflow-hidden">
+          <img src={bannerUrl} alt="" className="w-full h-full object-cover" />
+        </div>
+      ) : (
+        <div className="h-16 bg-gradient-to-r from-purple-500/80 to-accent-pink/70" />
+      )}
 
       {/* Body */}
       <div className="px-4 pb-4">
@@ -153,19 +172,31 @@ export function UserProfileCard({
           <span className="text-xs text-text-secondary">{role}</span>
         </div>
 
-        {statusMessage?.trim() ? (
+        {(statusMessage?.trim() || profileStatusMsg) ? (
           <p className="mt-2 text-xs font-semibold text-text-secondary leading-snug line-clamp-3 border-t border-border/60 pt-2">
-            {statusMessage.trim()}
+            {statusMessage?.trim() || profileStatusMsg}
           </p>
         ) : null}
 
-        {steamStatus?.game ? (
-          <div className="mt-2 flex items-center gap-2 border-t border-border/60 pt-2">
-            <span className="w-2 h-2 rounded-full shrink-0 bg-success" />
-            <span className="text-xs text-text-muted">En train de jouer à</span>
-            <span className="text-xs font-semibold text-text-primary truncate">
-              {steamStatus.game}
-            </span>
+        {bio ? (
+          <div className="mt-2 text-xs text-text-secondary leading-relaxed border-t border-border/60 pt-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-4 [&_ol]:my-1 [&_strong]:font-semibold [&_em]:italic [&_code]:bg-bg-tertiary [&_code]:border [&_code]:border-border [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border-strong [&_blockquote]:pl-2 [&_blockquote]:italic line-clamp-6">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-link hover:text-link-hover hover:underline break-all"
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {bio}
+            </ReactMarkdown>
           </div>
         ) : null}
 
