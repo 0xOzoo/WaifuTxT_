@@ -19,10 +19,17 @@ const mediaBlobPromiseCache = new Map<string, Promise<string | null>>()
 const decryptedUrlCache = new Map<string, string>()
 const decryptPromiseCache = new Map<string, Promise<string>>()
 const userProfileCache = new Map<string, { displayName: string | null; avatarUrl: string | null }>()
+const userBannerCache = new Map<string, string | null>()
 const roomJoinedMembersCache = new Map<string, Map<string, { displayName: string | null; avatarMxc: string | null }>>()
 
 const OWN_STATUS_MSG_STORAGE_KEY = 'waifutxt_status_msg'
+const OWN_BANNER_MXC_STORAGE_KEY = 'waifutxt_banner_mxc'
+const OWN_BIO_STORAGE_KEY = 'waifutxt_bio'
+const BANNER_PROFILE_KEY = 'io.waifu.banner'
+const STATUS_MSG_PROFILE_KEY = 'io.waifu.status_msg'
+const BIO_PROFILE_KEY = 'io.waifu.bio'
 export const MAX_PRESENCE_STATUS_MSG_LEN = 200
+export const MAX_BIO_LEN = 280
 
 let ownStatusStorageListenerBound = false
 
@@ -2303,14 +2310,19 @@ export function reapplyStoredOwnStatusToStore(): void {
 
 export async function setOwnPresence(presence: 'online' | 'unavailable' | 'offline'): Promise<void> {
   if (!client) return
-  const status_msg = getStoredOwnStatusMessage().slice(0, MAX_PRESENCE_STATUS_MSG_LEN)
+  // Only include status_msg if we have a locally stored value.
+  // Sending an empty string would clear the status on the server (and on other devices).
+  const storedMsg = getStoredOwnStatusMessage().trim()
+  const status_msg: string | undefined = storedMsg
+    ? storedMsg.slice(0, MAX_PRESENCE_STATUS_MSG_LEN)
+    : undefined
   if (isPresenceDebugEnabled()) {
     console.info('[WaifuTxT presence] setOwnPresence → PUT …/presence/{userId}/status', {
       presence,
       status_msg,
     })
   }
-  await client.setPresence({ presence, status_msg })
+  await client.setPresence({ presence, ...(status_msg !== undefined && { status_msg }) })
 }
 
 /**
@@ -2336,6 +2348,16 @@ export async function setOwnStatusMessage(text: string): Promise<void> {
       userId,
     })
   }
+  // Store in Matrix profile field so other users can read it even when offline
+  const token = c.getAccessToken()
+  fetch(
+    `${c.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${STATUS_MSG_PROFILE_KEY}`,
+    {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [STATUS_MSG_PROFILE_KEY]: { text: trimmed } }),
+    },
+  ).catch(() => { /* best-effort, presence is the primary source */ })
   await c.setPresence({ presence, status_msg: trimmed })
 }
 
@@ -2347,7 +2369,10 @@ export async function initOwnPresence(): Promise<void> {
   if (userId) {
     useRoomStore.getState().updatePresence(userId, presence)
     const msg = getStoredOwnStatusMessage().trim()
-    useRoomStore.getState().setStatusMessage(userId, msg || null)
+    // Only push to store if there's a locally stored value.
+    // If empty (e.g. mobile / different device), leave the store as-is so that
+    // seedPresenceFromUsers / User.presence can populate it from the server.
+    if (msg) useRoomStore.getState().setStatusMessage(userId, msg)
   }
   await setOwnPresence(presence)
 }
@@ -2440,6 +2465,186 @@ export async function uploadProfileAvatarGif(file: File): Promise<{ mxcUrl: stri
   const httpPreviewUrl = mxcToAvatarHttpUrl(contentUri)
 
   return { mxcUrl: contentUri, httpPreviewUrl }
+}
+
+/**
+ * Fetches the status message for any user from the Matrix profile field `io.waifu.status_msg`.
+ * Use as fallback when presence is not available (user offline, server doesn't support it, etc.).
+ */
+export async function getUserStatusMessage(userId: string): Promise<string | null> {
+  if (!client) return null
+  const token = client.getAccessToken()
+  try {
+    const res = await fetch(
+      `${client.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${STATUS_MSG_PROFILE_KEY}`,
+      token ? { headers: { 'Authorization': `Bearer ${token}` } } : undefined,
+    )
+    if (!res.ok) return null
+    const data = await res.json() as { [key: string]: { text?: string } }
+    const inner = data?.[STATUS_MSG_PROFILE_KEY]
+    const text = typeof inner?.text === 'string' ? inner.text.trim() : null
+    return text || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Returns the HTTP URL of the current user's profile banner from localStorage (no network call).
+ */
+export function getOwnBannerUrl(): string | null {
+  try {
+    const mxc = localStorage.getItem(OWN_BANNER_MXC_STORAGE_KEY)
+    if (!mxc) return null
+    return mxcToAvatarHttpUrl(mxc)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Uploads a PNG or GIF as profile banner and stores the MXC URI in the custom Matrix
+ * profile field `io.waifu.banner` (publicly readable by other users via GET /profile/.../io.waifu.banner).
+ */
+export async function uploadProfileBanner(file: File): Promise<{ mxcUrl: string; httpUrl: string | null }> {
+  const c = await ensureClientReady()
+  const userId = c.getUserId()
+  if (!userId) throw new Error('Non connecté')
+
+  const allowed = ['image/png', 'image/gif', 'image/jpeg', 'image/webp']
+  if (!allowed.includes(file.type)) throw new Error('Format non supporté. Utilisez PNG, GIF, JPEG ou WebP.')
+  if (file.size > 8 * 1024 * 1024) throw new Error('Fichier trop volumineux (max 8 Mo).')
+
+  const upload = await c.uploadContent(file)
+  const mxcUrl = upload.content_uri
+  if (!mxcUrl) throw new Error("Le serveur n'a pas renvoyé d'URI média")
+
+  const token = c.getAccessToken()
+  const res = await fetch(
+    `${c.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${BANNER_PROFILE_KEY}`,
+    {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [BANNER_PROFILE_KEY]: { url: mxcUrl } }),
+    },
+  )
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string }
+    throw new Error(body?.error ?? `Erreur serveur ${res.status}`)
+  }
+
+  try { localStorage.setItem(OWN_BANNER_MXC_STORAGE_KEY, mxcUrl) } catch { /* ignore */ }
+  const httpUrl = mxcToAvatarHttpUrl(mxcUrl)
+  userBannerCache.set(userId, httpUrl)
+  return { mxcUrl, httpUrl }
+}
+
+/**
+ * Clears the profile banner by setting an empty URL in the custom profile field.
+ */
+export async function removeProfileBanner(): Promise<void> {
+  const c = await ensureClientReady()
+  const userId = c.getUserId()
+  if (!userId) throw new Error('Non connecté')
+
+  const token = c.getAccessToken()
+  const res = await fetch(
+    `${c.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${BANNER_PROFILE_KEY}`,
+    {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [BANNER_PROFILE_KEY]: { url: '' } }),
+    },
+  )
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string }
+    throw new Error(body?.error ?? `Erreur serveur ${res.status}`)
+  }
+
+  try { localStorage.removeItem(OWN_BANNER_MXC_STORAGE_KEY) } catch { /* ignore */ }
+  userBannerCache.set(userId, null)
+}
+
+/**
+ * Fetches the profile banner HTTP URL for any user. Cached per session.
+ */
+export async function getUserBannerUrl(userId: string): Promise<string | null> {
+  if (userBannerCache.has(userId)) return userBannerCache.get(userId) ?? null
+  if (!client) return null
+
+  const token = client.getAccessToken()
+  try {
+    const res = await fetch(
+      `${client.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${BANNER_PROFILE_KEY}`,
+      token ? { headers: { 'Authorization': `Bearer ${token}` } } : undefined,
+    )
+    if (!res.ok) { userBannerCache.set(userId, null); return null }
+    const data = await res.json() as { [key: string]: { url?: string } }
+    const inner = data?.[BANNER_PROFILE_KEY]
+    const mxc = typeof inner?.url === 'string' && inner.url.startsWith('mxc://') ? inner.url : null
+    const httpUrl = mxc ? mxcToAvatarHttpUrl(mxc) : null
+    userBannerCache.set(userId, httpUrl)
+    return httpUrl
+  } catch {
+    userBannerCache.set(userId, null)
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Profile bio
+// ---------------------------------------------------------------------------
+
+export function getOwnBio(): string {
+  try {
+    return localStorage.getItem(OWN_BIO_STORAGE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export async function setOwnBio(text: string): Promise<void> {
+  const c = await ensureClientReady()
+  const userId = c.getUserId()
+  if (!userId) throw new Error('Non connecté')
+  const trimmed = text.trim().slice(0, MAX_BIO_LEN)
+  try {
+    localStorage.setItem(OWN_BIO_STORAGE_KEY, trimmed)
+  } catch { /* ignore */ }
+  const token = c.getAccessToken()
+  const res = await fetch(
+    `${c.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${BIO_PROFILE_KEY}`,
+    {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [BIO_PROFILE_KEY]: { text: trimmed } }),
+    },
+  )
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { errcode?: string; error?: string }
+    throw new Error(body.error ?? `HTTP ${res.status}`)
+  }
+}
+
+/**
+ * Fetches the bio for any user from the Matrix profile field `io.waifu.bio`.
+ */
+export async function getUserBio(userId: string): Promise<string | null> {
+  if (!client) return null
+  const token = client.getAccessToken()
+  try {
+    const res = await fetch(
+      `${client.baseUrl}/_matrix/client/v3/profile/${encodeURIComponent(userId)}/${BIO_PROFILE_KEY}`,
+      token ? { headers: { 'Authorization': `Bearer ${token}` } } : undefined,
+    )
+    if (!res.ok) return null
+    const data = await res.json() as { [key: string]: { text?: string } }
+    const inner = data?.[BIO_PROFILE_KEY]
+    const text = typeof inner?.text === 'string' ? inner.text.trim() : null
+    return text || null
+  } catch {
+    return null
+  }
 }
 
 export async function getSessions(): Promise<DeviceInfo[]> {
