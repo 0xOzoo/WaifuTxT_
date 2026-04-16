@@ -311,6 +311,10 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
 
       const msg = eventToMessage(event, room.roomId)
       if (msg) {
+        // Track last activity for synthetic presence
+        if (msg.sender && msg.timestamp) {
+          useRoomStore.getState().updateLastActivity(msg.sender, msg.timestamp)
+        }
         if (msg.replacesEventId) {
           applyMessageEdit(room.roomId, msg)
           return
@@ -361,6 +365,10 @@ function setupEventListeners(matrixSdk: typeof import('matrix-js-sdk')) {
         roomId: member.roomId,
         userIds: typingMembers.map((m: import('matrix-js-sdk').RoomMember) => m.name || m.userId),
       })
+      // Typing = definitely online right now
+      const now = Date.now()
+      const roomStore = useRoomStore.getState()
+      for (const m of typingMembers) roomStore.updateLastActivity(m.userId, now)
     } catch {
       // ignore typing errors
     }
@@ -2260,6 +2268,52 @@ function seedPresenceFromUsers(): void {
         : undefined
     applyPresence(user.userId, user.presence, sm)
   }
+  // Seed lastActivityMap from the most recent message per sender across all rooms.
+  seedLastActivityFromTimelines()
+}
+
+function seedLastActivityFromTimelines(): void {
+  if (!client) return
+  const roomStore = useRoomStore.getState()
+  for (const room of client.getRooms()) {
+    const timeline = room.getLiveTimeline().getEvents()
+    for (const event of timeline) {
+      const type = event.getType()
+      if (type !== 'm.room.message' && type !== 'm.room.encrypted') continue
+      const sender = event.getSender()
+      const ts = event.getOriginServerTs()
+      if (sender && ts) roomStore.updateLastActivity(sender, ts)
+    }
+  }
+}
+
+const SYNTHETIC_ONLINE_MS = 5 * 60 * 1000      // < 5 min  → online
+const SYNTHETIC_UNAVAILABLE_MS = 30 * 60 * 1000 // < 30 min → unavailable
+
+/**
+ * Derives the effective presence for a user by combining:
+ * 1. Server-provided presence (m.presence) — used when the server sends it
+ * 2. Synthetic presence from lastActivityMap — used when the server is silent
+ *
+ * Call this instead of reading presenceMap directly.
+ */
+export function derivePresence(userId: string): 'online' | 'unavailable' | 'offline' {
+  const state = useRoomStore.getState()
+  const serverPresence = state.presenceMap[userId]
+
+  // Trust the server if it explicitly says online or unavailable
+  if (serverPresence === 'online') return 'online'
+  if (serverPresence === 'unavailable') return 'unavailable'
+
+  // Fall back to synthetic presence from observed activity
+  const lastActivity = state.lastActivityMap[userId]
+  if (lastActivity !== undefined) {
+    const age = Date.now() - lastActivity
+    if (age < SYNTHETIC_ONLINE_MS) return 'online'
+    if (age < SYNTHETIC_UNAVAILABLE_MS) return 'unavailable'
+  }
+
+  return 'offline'
 }
 
 export function getOwnPresence(): 'online' | 'unavailable' | 'offline' {

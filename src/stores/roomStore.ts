@@ -10,6 +10,12 @@ interface RoomState {
   presenceMap: Record<string, PresenceValue>
   /** Custom status from Matrix presence (status_msg); key absent = unknown / none */
   statusMessageMap: Record<string, string>
+  /**
+   * Synthetic presence: timestamp (ms) of last observed activity per user.
+   * Fed from timeline messages, typing events, and read receipts.
+   * Used to derive online/offline when the server doesn't send m.presence.
+   */
+  lastActivityMap: Record<string, number>
 
   setRooms: (rooms: Map<string, RoomSummary>) => void
   updateRoom: (roomId: string, update: Partial<RoomSummary>) => void
@@ -18,6 +24,7 @@ interface RoomState {
   setMembers: (roomId: string, members: RoomMember[]) => void
   updatePresence: (userId: string, presence: PresenceValue) => void
   setStatusMessage: (userId: string, message: string | null) => void
+  updateLastActivity: (userId: string, ts: number) => void
   getSpaces: () => RoomSummary[]
   getRoomsForSpace: (spaceId: string | null) => RoomSummary[]
   getDirectMessages: () => RoomSummary[]
@@ -31,6 +38,7 @@ export const useRoomStore = create<RoomState>((set, get) => ({
   members: new Map(),
   presenceMap: {},
   statusMessageMap: {},
+  lastActivityMap: {},
 
   setRooms: (rooms) => set({ rooms }),
 
@@ -68,6 +76,12 @@ export const useRoomStore = create<RoomState>((set, get) => ({
     })
   },
 
+  updateLastActivity: (userId, ts) => {
+    const current = get().lastActivityMap[userId]
+    if (current !== undefined && ts <= current) return
+    set((state) => ({ lastActivityMap: { ...state.lastActivityMap, [userId]: ts } }))
+  },
+
   getSpaces: () => {
     const { rooms } = get()
     return Array.from(rooms.values()).filter((r) => r.isSpace)
@@ -103,5 +117,6 @@ export const useRoomStore = create<RoomState>((set, get) => ({
       members: new Map(),
       presenceMap: {},
       statusMessageMap: {},
+      lastActivityMap: {},
     }),
 }))

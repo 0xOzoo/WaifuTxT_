@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { getStoredOwnStatusMessage } from '../../lib/matrix'
+import { getStoredOwnStatusMessage, derivePresence } from '../../lib/matrix'
 import { useAuthStore } from '../../stores/authStore'
 import { useRoomStore } from '../../stores/roomStore'
 import { useUiStore } from '../../stores/uiStore'
@@ -20,6 +20,7 @@ export function MemberPanel() {
   const activeRoomId = useRoomStore((s) => s.activeRoomId)
   const members = useRoomStore((s) => (activeRoomId ? s.members.get(activeRoomId) : undefined))
   const presenceMap = useRoomStore((s) => s.presenceMap)
+  const lastActivityMap = useRoomStore((s) => s.lastActivityMap)
   const statusMessageMap = useRoomStore((s) => s.statusMessageMap)
 
   const [openCard, setOpenCard] = useState<RoomMember | null>(null)
@@ -31,8 +32,9 @@ export function MemberPanel() {
   const mods    = members.filter((m) => m.powerLevel >= 50 && m.powerLevel < 100)
   const regular = members.filter((m) => m.powerLevel < 50)
 
-  const getStatus = (m: RoomMember): PresenceValue =>
-    (presenceMap[m.userId] as PresenceValue | undefined) ?? m.presence
+  // presenceMap/lastActivityMap in deps so the component re-renders when they change
+  void presenceMap; void lastActivityMap
+  const getStatus = (m: RoomMember): PresenceValue => derivePresence(m.userId)
 
   const sortByPresence = (list: RoomMember[]) =>
     [...list].sort((a, b) => presenceOrder(getStatus(a)) - presenceOrder(getStatus(b)))
