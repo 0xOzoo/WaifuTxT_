@@ -868,7 +868,7 @@ export function RoomSidebar() {
         </div>
       )}
 
-      <div className="relative -left-[72px] w-[calc(100%+72px)] min-h-[3.25rem] py-2 pl-[80px] pr-2 flex items-center justify-between gap-2 bg-bg-tertiary/95 border-t border-border">
+      <div className="relative -left-[72px] w-[calc(100%+72px)] min-h-[3.25rem] py-2 pl-[72px] pr-2 flex items-center justify-between gap-2 bg-bg-tertiary/95 border-t border-border">
          {showPresenceMenu && (
           <div
             ref={presenceMenuRef}
@@ -891,7 +891,7 @@ export function RoomSidebar() {
 
         <button
           onClick={() => setShowPresenceMenu((v) => !v)}
-          className="flex min-w-0 flex-1 basis-0 items-center justify-start gap-2 overflow-x-hidden rounded-md px-1.5 py-0.5 text-left hover:bg-bg-hover/70 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-pink"
+          className="flex min-w-0 flex-1 basis-0 items-center justify-start gap-2 overflow-x-hidden rounded-md pl-0 pr-1.5 py-0.5 text-left hover:bg-bg-hover/70 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-pink"
           title="Changer de statut"
           aria-label="Changer de statut"
         >
