@@ -2281,7 +2281,7 @@ function seedLastActivityFromTimelines(): void {
       const type = event.getType()
       if (type !== 'm.room.message' && type !== 'm.room.encrypted') continue
       const sender = event.getSender()
-      const ts = event.getOriginServerTs()
+      const ts = event.getTs()
       if (sender && ts) roomStore.updateLastActivity(sender, ts)
     }
   }
