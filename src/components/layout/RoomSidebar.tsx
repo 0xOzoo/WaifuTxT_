@@ -868,7 +868,7 @@ export function RoomSidebar() {
         </div>
       )}
 
-      <div className="relative -left-[72px] w-[calc(100%+72px)] min-h-[3.25rem] py-2 pl-[72px] pr-2 flex items-center justify-between gap-2 bg-bg-tertiary/95 border-t border-border">
+      <div className="relative -left-[72px] w-[calc(100%+72px)] min-h-[3.25rem] py-2 pl-4 pr-2 flex items-center justify-between gap-2 bg-bg-tertiary/95 border-t border-border">
          {showPresenceMenu && (
           <div
             ref={presenceMenuRef}
