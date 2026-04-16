@@ -284,7 +284,10 @@ function MarkdownText({
 }
 
 function extractUrls(text: string): string[] {
-  const raw = text.match(URL_REGEX) || []
+  // Strip Matrix mentions (@user:server) before URL extraction to avoid
+  // matching homeserver names as URLs (e.g. matrix.org in @user:matrix.org)
+  const withoutMentions = text.replace(/@[A-Za-z0-9._=+\-/]+:[A-Za-z0-9.-]+(?::\d+)?/g, '')
+  const raw = withoutMentions.match(URL_REGEX) || []
   const cleaned = raw.map((u) => {
     const clean = splitTrailingPunctuation(u).cleanUrl
     if (!clean) return ''
@@ -1067,6 +1070,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
   const setActiveSpace = useRoomStore((s) => s.setActiveSpace)
   const membersMap = useRoomStore((s) => s.members)
   const setPendingReply = useUiStore((s) => s.setPendingReply)
+  const bumpChatInputFocus = useUiStore((s) => s.bumpChatInputFocus)
   const roomMembers = useMemo(() => membersMap.get(message.roomId) || [], [membersMap, message.roomId])
   const repliedMessage = useMemo(() => {
     if (!message.replyTo) return null
@@ -1336,14 +1340,15 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
           >
             {canReplyMessage && (
               <button
-                onClick={() =>
+                onClick={() => {
                   setPendingReply({
                     roomId: message.roomId,
                     eventId: message.eventId,
                     senderName: message.senderName,
                     preview: compactPreview(message.content || '(message)'),
                   })
-                }
+                  bumpChatInputFocus()
+                }}
                 className={actionButtonClass}
                 title="Répondre au message"
                 aria-label="Répondre au message"
@@ -1731,7 +1736,7 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
         canReact={canReactMessage}
         onReact={(emoji) => { addRecentEmoji(emoji); void handleToggleReaction(emoji) }}
         canReply={canReplyMessage}
-        onReply={() => setPendingReply({ roomId: message.roomId, eventId: message.eventId, senderName: message.senderName, preview: compactPreview(message.content || '(message)') })}
+        onReply={() => { setPendingReply({ roomId: message.roomId, eventId: message.eventId, senderName: message.senderName, preview: compactPreview(message.content || '(message)') }); bumpChatInputFocus() }}
         canThread={canStartThread}
         onThread={() => openThreadPanel(message.roomId, message.eventId)}
         canEdit={canEditMessage}
