@@ -61,7 +61,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: waifutxt-${{ matrix.name }}
+          name: waifuchat-${{ matrix.name }}
           path: ${{ matrix.files }}
           if-no-files-found: error
           retention-days: 14
@@ -106,5 +106,5 @@ jobs:
         run: |
           gh release create "${{ steps.version.outputs.tag }}" dist-desktop/* \
             --target "${{ github.sha }}" \
-            --title "WaifuTxT_ ${{ steps.version.outputs.tag }}" \
+            --title "WaifuChat ${{ steps.version.outputs.tag }}" \
             --generate-notes

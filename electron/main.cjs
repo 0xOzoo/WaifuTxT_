@@ -82,7 +82,7 @@ function resolveFile(reqPath) {
 
 // ── App ready ─────────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  app.setName('WaifuTxT_');
+  app.setName('WaifuChat');
 
   // Register waifutxt:// protocol handler
   protocol.handle('waifutxt', (request) => {

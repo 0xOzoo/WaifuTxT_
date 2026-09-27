@@ -32,7 +32,7 @@ export function useNotifications() {
         if (lastMsg.sender === session.userId) continue
 
         const room = useRoomStore.getState().rooms.get(roomId)
-        new Notification(room?.name || 'WaifuTxT', {
+        new Notification(room?.name || 'WaifuChat', {
           body: `${lastMsg.senderName}: ${lastMsg.content}`,
           icon: '/vite.svg',
           tag: lastMsg.eventId,

@@ -61,7 +61,7 @@ export function LoginScreen() {
           <h1 className="text-4xl font-bold bg-gradient-to-r from-accent-pink to-accent-pink-hover bg-clip-text text-transparent mb-1">
             ワイフ
           </h1>
-          <h2 className="text-2xl font-bold text-text-primary">WaifuTxT</h2>
+          <h2 className="text-2xl font-bold text-text-primary">WaifuChat</h2>
           <p className="text-sm text-text-muted mt-0.5">Matrix Client</p>
         </div>
 

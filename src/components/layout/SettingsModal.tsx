@@ -571,7 +571,7 @@ export function SettingsModal() {
                     <p className="text-sm font-medium text-text-primary">Photo de profil (serveur Matrix)</p>
                     {waifuOptIn && (
                       <p className="text-xs text-text-muted">
-                        L’option waifu remplace l’affichage de ton avatar dans WaifuTxT_, mais la photo ci-dessous est
+                        L’option waifu remplace l’affichage de ton avatar dans WaifuChat, mais la photo ci-dessous est
                         bien celle stockée sur le serveur pour les autres clients (Element, etc.).
                       </p>
                     )}
@@ -648,7 +648,7 @@ export function SettingsModal() {
                   <div>
                     <p className="text-sm font-medium text-text-primary">Personnalisation waifu (opt-in)</p>
                     <p className="text-xs text-text-secondary mt-1">
-                      Remplace localement votre avatar par une waifu dans l'interface WaifuTxT_.
+                      Remplace localement votre avatar par une waifu dans l'interface WaifuChat.
                     </p>
                   </div>
                   <button

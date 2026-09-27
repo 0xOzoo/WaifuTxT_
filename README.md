@@ -1,4 +1,4 @@
-# WaifuTxT_
+# WaifuChat
 
 Client web pour le protocole [Matrix](https://matrix.org), avec une interface inspirée de Discord et un thème cyberpunk / anime.
 

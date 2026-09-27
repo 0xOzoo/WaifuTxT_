@@ -51,7 +51,7 @@ export function MessageList() {
           <h2 className="text-3xl font-bold bg-gradient-to-r from-accent-pink to-purple-500 bg-clip-text text-transparent mb-2">
             ワイフ
           </h2>
-          <h3 className="text-xl text-text-primary font-semibold mb-1">WaifuTxT</h3>
+          <h3 className="text-xl text-text-primary font-semibold mb-1">WaifuChat</h3>
           <p className="text-text-secondary text-sm">Sélectionne un salon pour commencer</p>
         </div>
       </div>

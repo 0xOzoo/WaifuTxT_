@@ -82,7 +82,7 @@ export async function login(
   const response = await tempClient.login('m.login.password', {
     user: username,
     password,
-    initial_device_display_name: 'WaifuTxT Web',
+    initial_device_display_name: 'WaifuChat Web',
   })
 
   return {

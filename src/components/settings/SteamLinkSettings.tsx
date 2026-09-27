@@ -88,7 +88,7 @@ export function SteamLinkSettings({ disabled }: { disabled?: boolean }) {
       <p className="text-sm font-medium text-text-primary">Steam</p>
       <p className="text-xs text-text-muted leading-relaxed">
         Liez votre compte Steam pour afficher le jeu en cours dans votre profil. La liaison utilise
-        OpenID Steam et ne transmet pas votre mot de passe à WaifuTxT.
+        OpenID Steam et ne transmet pas votre mot de passe à WaifuChat.
       </p>
 
       {info?.linked ? (
