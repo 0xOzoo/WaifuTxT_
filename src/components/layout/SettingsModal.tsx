@@ -13,6 +13,7 @@ import { ProfileBannerUpload } from '../settings/ProfileBannerUpload'
 import { ProfileStatusSettings } from '../settings/ProfileStatusSettings'
 import { ProfileBioSettings } from '../settings/ProfileBioSettings'
 import { SteamLinkSettings } from '../settings/SteamLinkSettings'
+import { AppVersionSettings } from '../settings/AppVersionSettings'
 import { CustomizationSettings } from '../settings/CustomizationSettings'
 import { AudioSettings } from '../settings/AudioSettings'
 import { WAIFU_OPTIONS, getWaifuById } from '../../lib/waifu'
@@ -419,10 +420,7 @@ function AccountSection() {
         </div>
       )}
 
-      <div className="px-4 py-2.5 rounded-lg border border-border bg-bg-primary/40 flex items-center justify-between">
-        <span className="text-xs text-text-muted">Version</span>
-        <span className="text-xs font-mono text-text-secondary">{__APP_VERSION__}</span>
-      </div>
+      <AppVersionSettings />
 
       <div className="p-4 rounded-lg border border-danger/30 bg-danger/5 space-y-3">
         <div>

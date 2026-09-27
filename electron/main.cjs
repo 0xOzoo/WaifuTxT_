@@ -377,19 +377,32 @@ function createWindow() {
 function setupAutoUpdater() {
   // Dev runs and the portable exe (which electron-updater can't self-replace)
   // skip auto-update entirely.
-  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
+  const unsupported = !app.isPackaged ? 'dev' : process.env.PORTABLE_EXECUTABLE_DIR ? 'portable' : null;
+  let status = unsupported ? { state: 'unsupported', reason: unsupported } : { state: 'idle' };
+  let checkedAt = null;
+
+  // Settings asks for the current state on open; the banner and settings then follow updater:status.
+  ipcMain.handle('updater:get-status', () => ({ ...status, checkedAt }));
+  if (unsupported) {
+    ipcMain.handle('updater:check', () => ({ ...status, checkedAt }));
+    return;
+  }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
   const send = (payload) => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:status', payload);
+    // A finished download stays the relevant state until the app restarts.
+    if (status.state === 'downloaded' && payload.state !== 'downloaded') return;
+    status = payload;
+    if (payload.state === 'available' || payload.state === 'not-available') checkedAt = Date.now();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:status', { ...status, checkedAt });
   };
 
   autoUpdater.on('checking-for-update', () => send({ state: 'checking' }));
   autoUpdater.on('update-available',    (info) => send({ state: 'available', version: info.version }));
   autoUpdater.on('update-not-available', () => send({ state: 'not-available' }));
-  autoUpdater.on('download-progress', (p) => send({ state: 'downloading', percent: Math.round(p.percent) }));
+  autoUpdater.on('download-progress', (p) => send({ state: 'downloading', version: status.version, percent: Math.round(p.percent) }));
   autoUpdater.on('update-downloaded', (info) => send({ state: 'downloaded', version: info.version }));
   autoUpdater.on('error', (err) => {
     console.error('[updater] error:', err);
@@ -403,6 +416,11 @@ function setupAutoUpdater() {
   setTimeout(() => void removeInstalledUpdateCache(), 30_000);
 
   const check = () => autoUpdater.checkForUpdates().catch((err) => console.error('[updater] check failed:', err));
+
+  ipcMain.handle('updater:check', async () => {
+    if (status.state !== 'downloaded' && status.state !== 'downloading' && status.state !== 'checking') await check();
+    return { ...status, checkedAt };
+  });
 
   // First check shortly after launch (let the window paint first), then every
   // few hours while the app stays open — same cadence Discord uses.

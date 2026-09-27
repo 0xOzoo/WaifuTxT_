@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('waifuUpdater', {
   restartAndInstall() {
     ipcRenderer.send('updater:install');
   },
+  getStatus: () => ipcRenderer.invoke('updater:get-status'),
+  checkNow: () => ipcRenderer.invoke('updater:check'),
 });
 
 contextBridge.exposeInMainWorld('waifuSystem', {

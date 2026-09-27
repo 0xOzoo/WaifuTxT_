@@ -1,22 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useUpdaterStatus } from '../../hooks/useUpdaterStatus'
 
 // Shows up only once a new desktop build has finished downloading in the
 // background (electron/main.cjs "setupAutoUpdater"). Renders nothing on the
 // web build or while nothing is ready yet — no noise for the common case.
 export function UpdateBanner() {
-  const [status, setStatus] = useState<WaifuUpdaterStatus | null>(null)
-  const [dismissed, setDismissed] = useState(false)
+  const status = useUpdaterStatus()
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
 
-  useEffect(() => {
-    const api = window.waifuUpdater
-    if (!api) return
-    return api.onStatus((next) => {
-      if (next.state === 'downloaded') setDismissed(false)
-      setStatus(next)
-    })
-  }, [])
-
-  if (!status || status.state !== 'downloaded' || dismissed) return null
+  if (!status || status.state !== 'downloaded' || dismissedVersion === status.version) return null
 
   return (
     <div className="fixed bottom-4 right-4 z-[100] w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-accent-pink/30 bg-bg-secondary shadow-2xl p-3">
@@ -37,7 +29,7 @@ export function UpdateBanner() {
               Redémarrer maintenant
             </button>
             <button
-              onClick={() => setDismissed(true)}
+              onClick={() => setDismissedVersion(status.version ?? null)}
               className="px-3 py-1.5 text-text-muted text-xs hover:text-text-secondary transition-colors cursor-pointer"
             >
               Plus tard
