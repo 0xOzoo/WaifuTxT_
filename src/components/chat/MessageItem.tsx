@@ -408,8 +408,11 @@ function YouTubeEmbed({ url, videoId }: { url: string; videoId: string }) {
           <iframe
             className="absolute inset-0 w-full h-full"
             src={`https://www.youtube.com/embed/${videoId}?autoplay=1`}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture"
             allowFullScreen
+            // The desktop app is cross-origin isolated (COEP require-corp); a credentialless
+            // iframe is the only way to embed YouTube, which sends no COEP header.
+            {...{ credentialless: '' }}
             title={meta?.title ?? 'YouTube'}
           />
         </div>

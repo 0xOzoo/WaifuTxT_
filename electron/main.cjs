@@ -112,8 +112,18 @@ app.whenReady().then(() => {
 
   // Permissions: allow mic + notifications (voice messages, voice rooms, notifs)
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => {
-    cb(['media', 'display-capture', 'notifications', 'clipboard-read', 'clipboard-sanitized-write'].includes(perm));
+    cb(['media', 'display-capture', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen'].includes(perm));
   });
+
+  // YouTube refuses to play embeds without a Referer (error 153), and waifutxt:// pages send none.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://www.youtube.com/embed/*', 'https://www.youtube-nocookie.com/embed/*'] },
+    (details, callback) => {
+      const headers = details.requestHeaders;
+      if (!headers.Referer) headers.Referer = 'https://waifuchat.duckdns.org/';
+      callback({ requestHeaders: headers });
+    },
+  );
 
   // Screen share (getDisplayMedia) needs a source picker in Electron.
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
