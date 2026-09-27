@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAuthStore } from '../../stores/authStore'
 import {
   getOwnSteamLink,
@@ -28,38 +28,70 @@ function consumeCallbackFlash(): Flash {
 export function SteamLinkSettings({ disabled }: { disabled?: boolean }) {
   const session = useAuthStore((s) => s.session)
   const [info, setInfo] = useState<SteamLinkInfo | null>(null)
+  const [checkError, setCheckError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
+  const [awaitingBrowser, setAwaitingBrowser] = useState(false)
   const [flash, setFlash] = useState<Flash>(() => consumeCallbackFlash())
+
+  const refresh = useCallback(async (): Promise<SteamLinkInfo | null> => {
+    if (!session) return null
+    try {
+      const i = await getOwnSteamLink(session.accessToken)
+      setInfo(i)
+      setCheckError(null)
+      return i
+    } catch (err) {
+      setCheckError(err instanceof Error ? err.message : 'Vérification Steam impossible')
+      return null
+    }
+  }, [session])
 
   useEffect(() => {
     if (!session) {
       setLoading(false)
       return
     }
-    let cancelled = false
-    getOwnSteamLink(session.accessToken)
-      .then((i) => {
-        if (!cancelled) setInfo(i)
+    setLoading(true)
+    void refresh().finally(() => setLoading(false))
+  }, [session, refresh])
+
+  // Desktop: the Steam login happens in the system browser, so re-check when the user comes back.
+  useEffect(() => {
+    if (!awaitingBrowser) return
+    const onFocus = () => {
+      void refresh().then((i) => {
+        if (i?.linked) {
+          setAwaitingBrowser(false)
+          setFlash({ kind: 'success', message: 'Compte Steam lié.' })
+        }
       })
-      .catch(() => {
-        if (!cancelled) setInfo({ linked: false, steamId: null, linkedAt: null })
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
     }
-  }, [session])
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [awaitingBrowser, refresh])
 
   const handleLink = async () => {
     if (!session) return
     setWorking(true)
     setFlash(null)
     try {
+      const current = await getOwnSteamLink(session.accessToken)
+      setInfo(current)
+      setCheckError(null)
+      if (current.linked) {
+        setFlash({ kind: 'success', message: 'Ce compte est déjà lié à Steam.' })
+        setWorking(false)
+        return
+      }
       const url = await startSteamLink(session.accessToken)
-      window.location.href = url
+      if (window.waifuSteam) {
+        window.open(url, '_blank')
+        setAwaitingBrowser(true)
+        setWorking(false)
+      } else {
+        window.location.href = url
+      }
     } catch (err) {
       setFlash({ kind: 'error', message: err instanceof Error ? err.message : 'Erreur' })
       setWorking(false)
@@ -91,7 +123,22 @@ export function SteamLinkSettings({ disabled }: { disabled?: boolean }) {
         OpenID Steam et ne transmet pas votre mot de passe à WaifuChat.
       </p>
 
-      {info?.linked ? (
+      {!info && checkError ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-danger">{checkError}</span>
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => {
+              setLoading(true)
+              void refresh().finally(() => setLoading(false))
+            }}
+            className="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium border border-border text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Vérification…' : 'Réessayer'}
+          </button>
+        </div>
+      ) : info?.linked ? (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-text-secondary font-mono truncate">
             SteamID : {info.steamId}
@@ -106,14 +153,19 @@ export function SteamLinkSettings({ disabled }: { disabled?: boolean }) {
           </button>
         </div>
       ) : (
-        <div className="flex justify-end">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {awaitingBrowser && (
+            <span className="mr-auto text-xs text-text-muted">
+              Termine la liaison dans ton navigateur, puis reviens ici.
+            </span>
+          )}
           <button
             type="button"
             disabled={isDisabled}
             onClick={() => void handleLink()}
             className="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium bg-accent-pink text-white hover:bg-accent-pink-hover transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Chargement…' : working ? 'Redirection…' : 'Lier un compte Steam'}
+            {loading ? 'Chargement…' : working ? 'Vérification…' : 'Lier un compte Steam'}
           </button>
         </div>
       )}

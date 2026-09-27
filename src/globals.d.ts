@@ -19,7 +19,16 @@ interface WaifuSystemApi {
   setLaunchAtStartup: (enabled: boolean) => Promise<boolean>
 }
 
+interface WaifuSteamApi {
+  request: (
+    method: 'GET' | 'POST' | 'DELETE',
+    path: string,
+    token?: string,
+  ) => Promise<{ status: number; body: string }>
+}
+
 interface Window {
   waifuUpdater?: WaifuUpdaterApi
   waifuSystem?: WaifuSystemApi
+  waifuSteam?: WaifuSteamApi
 }

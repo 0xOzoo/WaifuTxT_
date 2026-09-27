@@ -1,7 +1,8 @@
 /**
  * Client for the steam-presence backend service.
  * The backend is reached via an nginx proxy at /api/steam/* in production,
- * overridable via VITE_STEAM_PRESENCE_BASE_URL for local dev.
+ * overridable via VITE_STEAM_PRESENCE_BASE_URL for local dev. In the desktop app,
+ * requests go through the Electron main process (window.waifuSteam) instead.
  */
 
 const BASE_URL =
@@ -19,6 +20,36 @@ export type SteamLinkInfo = {
   linked: boolean
   steamId: string | null
   linkedAt: number | null
+}
+
+type SteamResponse = { ok: boolean; status: number; data: unknown }
+
+async function steamRequest(
+  method: 'GET' | 'POST' | 'DELETE',
+  path: string,
+  token?: string,
+): Promise<SteamResponse> {
+  let status: number
+  let text: string
+  if (window.waifuSteam) {
+    ;({ status, body: text } = await window.waifuSteam.request(method, path, token))
+  } else {
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers: token ? { authorization: `Bearer ${token}` } : undefined,
+    })
+    status = res.status
+    text = await res.text()
+  }
+  let data: unknown = null
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      throw new Error(`Service Steam injoignable (réponse invalide, HTTP ${status})`)
+    }
+  }
+  return { ok: status >= 200 && status < 300, status, data }
 }
 
 const STATUS_CACHE_TTL_MS = 30_000
@@ -42,11 +73,9 @@ export async function getSteamStatus(matrixUserId: string): Promise<SteamStatus 
 
   const promise = (async () => {
     try {
-      const res = await fetch(`${BASE_URL}/status/${encodeURIComponent(matrixUserId)}`, {
-        method: 'GET',
-      })
+      const res = await steamRequest('GET', `/status/${encodeURIComponent(matrixUserId)}`)
       if (!res.ok) return null
-      const body = (await res.json()) as SteamStatus | null
+      const body = res.data as SteamStatus | null
       statusCache.set(matrixUserId, { value: body, fetchedAt: Date.now() })
       return body
     } catch {
@@ -61,27 +90,18 @@ export async function getSteamStatus(matrixUserId: string): Promise<SteamStatus 
 }
 
 export async function getOwnSteamLink(accessToken: string): Promise<SteamLinkInfo> {
-  const res = await fetch(`${BASE_URL}/link/me`, {
-    headers: { authorization: `Bearer ${accessToken}` },
-  })
-  if (!res.ok) throw new Error(`link/me failed: ${res.status}`)
-  return (await res.json()) as SteamLinkInfo
+  const res = await steamRequest('GET', '/link/me', accessToken)
+  if (!res.ok) throw new Error(`Vérification Steam impossible (HTTP ${res.status})`)
+  return res.data as SteamLinkInfo
 }
 
 export async function startSteamLink(accessToken: string): Promise<string> {
-  const res = await fetch(`${BASE_URL}/link/start`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}` },
-  })
-  if (!res.ok) throw new Error(`link/start failed: ${res.status}`)
-  const body = (await res.json()) as { redirectUrl: string }
-  return body.redirectUrl
+  const res = await steamRequest('POST', '/link/start', accessToken)
+  if (!res.ok) throw new Error(`Démarrage de la liaison Steam impossible (HTTP ${res.status})`)
+  return (res.data as { redirectUrl: string }).redirectUrl
 }
 
 export async function unlinkSteam(accessToken: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/link/me`, {
-    method: 'DELETE',
-    headers: { authorization: `Bearer ${accessToken}` },
-  })
-  if (!res.ok) throw new Error(`unlink failed: ${res.status}`)
+  const res = await steamRequest('DELETE', '/link/me', accessToken)
+  if (!res.ok) throw new Error(`Déliaison Steam impossible (HTTP ${res.status})`)
 }

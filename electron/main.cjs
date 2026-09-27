@@ -1,7 +1,7 @@
 // electron/main.cjs  — CommonJS wrapper (avoids "type":"module" conflict)
 'use strict';
 
-const { app, BrowserWindow, shell, session, protocol, desktopCapturer, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, session, protocol, desktopCapturer, ipcMain, net } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs   = require('fs');
@@ -135,6 +135,7 @@ app.whenReady().then(() => {
   createWindow();
   setupAutoUpdater();
   setupStartupSettings();
+  setupSteamProxy();
 });
 
 function escapeHtml(s) {
@@ -403,6 +404,22 @@ function setupStartupSettings() {
   ipcMain.handle('startup:set', (_event, enabled) => {
     app.setLoginItemSettings({ openAtLogin: !!enabled });
     return app.getLoginItemSettings().openAtLogin;
+  });
+}
+
+// ── Steam presence API proxy ─────────────────────────────────────────────────────
+// The renderer's origin (waifutxt://app) is not a web origin the steam-presence
+// service accepts over CORS, so desktop calls go through the main process.
+const STEAM_API_BASE = (process.env.WAIFU_STEAM_API_BASE || 'https://waifuchat.duckdns.org/api/steam').replace(/\/+$/, '');
+const STEAM_API_PATH = /^\/(link\/(start|me)|status\/[^/?#]+)$/;
+
+function setupSteamProxy() {
+  ipcMain.handle('steam:request', async (_event, { method, path: apiPath, token }) => {
+    if (typeof apiPath !== 'string' || !STEAM_API_PATH.test(apiPath)) throw new Error('Invalid Steam API path');
+    if (!['GET', 'POST', 'DELETE'].includes(method)) throw new Error('Invalid Steam API method');
+    const headers = token ? { authorization: `Bearer ${token}` } : {};
+    const res = await net.fetch(`${STEAM_API_BASE}${apiPath}`, { method, headers });
+    return { status: res.status, body: await res.text() };
   });
 }
 

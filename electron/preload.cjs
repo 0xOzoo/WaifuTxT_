@@ -19,3 +19,7 @@ contextBridge.exposeInMainWorld('waifuSystem', {
   getLaunchAtStartup: () => ipcRenderer.invoke('startup:get'),
   setLaunchAtStartup: (enabled) => ipcRenderer.invoke('startup:set', enabled),
 });
+
+contextBridge.exposeInMainWorld('waifuSteam', {
+  request: (method, path, token) => ipcRenderer.invoke('steam:request', { method, path, token }),
+});
