@@ -389,7 +389,8 @@ function setupAutoUpdater() {
   // Silent install (no NSIS wizard), then relaunch the app.
   ipcMain.on('updater:install', () => autoUpdater.quitAndInstall(true, true));
 
-  removeInstalledUpdateCache();
+  // Delayed: right after a silent update the installer is still running from pending/ and locked.
+  setTimeout(() => void removeInstalledUpdateCache(), 30_000);
 
   const check = () => autoUpdater.checkForUpdates().catch((err) => console.error('[updater] check failed:', err));
 
@@ -401,7 +402,9 @@ function setupAutoUpdater() {
 
 // electron-updater keeps the last downloaded installer in <cache>/<updaterCacheDirName>/pending
 // until the next update replaces it. Once that version is running, it's dead weight.
-function removeInstalledUpdateCache() {
+// (<cache>/<updaterCacheDirName>/installer.exe is kept: it's the base for differential downloads.)
+async function removeInstalledUpdateCache() {
+  let pending;
   try {
     const yml = fs.readFileSync(path.join(process.resourcesPath, 'app-update.yml'), 'utf8');
     const dirName = /^updaterCacheDirName:\s*['"]?([^'"\r\n]+)/m.exec(yml)?.[1];
@@ -412,16 +415,37 @@ function removeInstalledUpdateCache() {
       : process.platform === 'darwin'
         ? path.join(home, 'Library', 'Caches')
         : process.env.XDG_CACHE_HOME || path.join(home, '.cache');
-    const pending = path.join(cacheBase, dirName, 'pending');
-    const info = JSON.parse(fs.readFileSync(path.join(pending, 'update-info.json'), 'utf8'));
-    const cached = /(\d+)\.(\d+)\.(\d+)/.exec(info.fileName || '');
-    if (!cached) return;
-    const current = app.getVersion().split('.').map(Number);
-    const cachedVer = cached.slice(1, 4).map(Number);
-    const isNewer = cachedVer[0] - current[0] || cachedVer[1] - current[1] || cachedVer[2] - current[2];
-    if (isNewer <= 0) fs.rmSync(pending, { recursive: true, force: true });
+    pending = path.join(cacheBase, dirName, 'pending');
   } catch (_) {
-    // No cached update, or unreadable: nothing to clean.
+    return;
+  }
+
+  const current = app.getVersion().split('.').map(Number);
+  const isNotNewer = (name) => {
+    const m = /(\d+)\.(\d+)\.(\d+)/.exec(name);
+    if (!m) return false;
+    const v = m.slice(1, 4).map(Number);
+    return (v[0] - current[0] || v[1] - current[1] || v[2] - current[2]) <= 0;
+  };
+
+  let names;
+  try {
+    names = await fs.promises.readdir(pending);
+  } catch (_) {
+    return;
+  }
+  for (const name of names.filter(isNotNewer)) {
+    await fs.promises
+      .rm(path.join(pending, name), { force: true, maxRetries: 10, retryDelay: 3000 })
+      .catch((err) => console.error('[updater] cache cleanup failed:', err));
+  }
+
+  const infoFile = path.join(pending, 'update-info.json');
+  try {
+    const info = JSON.parse(fs.readFileSync(infoFile, 'utf8'));
+    if (!info.fileName || !fs.existsSync(path.join(pending, info.fileName))) fs.rmSync(infoFile, { force: true });
+  } catch (_) {
+    // No update-info.json: nothing to reconcile.
   }
 }
 
