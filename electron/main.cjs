@@ -386,7 +386,10 @@ function setupAutoUpdater() {
     send({ state: 'error', message: err instanceof Error ? err.message : String(err) });
   });
 
-  ipcMain.on('updater:install', () => autoUpdater.quitAndInstall());
+  // Silent install (no NSIS wizard), then relaunch the app.
+  ipcMain.on('updater:install', () => autoUpdater.quitAndInstall(true, true));
+
+  removeInstalledUpdateCache();
 
   const check = () => autoUpdater.checkForUpdates().catch((err) => console.error('[updater] check failed:', err));
 
@@ -394,6 +397,32 @@ function setupAutoUpdater() {
   // few hours while the app stays open — same cadence Discord uses.
   setTimeout(check, 5000);
   setInterval(check, 4 * 60 * 60 * 1000);
+}
+
+// electron-updater keeps the last downloaded installer in <cache>/<updaterCacheDirName>/pending
+// until the next update replaces it. Once that version is running, it's dead weight.
+function removeInstalledUpdateCache() {
+  try {
+    const yml = fs.readFileSync(path.join(process.resourcesPath, 'app-update.yml'), 'utf8');
+    const dirName = /^updaterCacheDirName:\s*['"]?([^'"\r\n]+)/m.exec(yml)?.[1];
+    if (!dirName) return;
+    const home = require('os').homedir();
+    const cacheBase = process.platform === 'win32'
+      ? process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local')
+      : process.platform === 'darwin'
+        ? path.join(home, 'Library', 'Caches')
+        : process.env.XDG_CACHE_HOME || path.join(home, '.cache');
+    const pending = path.join(cacheBase, dirName, 'pending');
+    const info = JSON.parse(fs.readFileSync(path.join(pending, 'update-info.json'), 'utf8'));
+    const cached = /(\d+)\.(\d+)\.(\d+)/.exec(info.fileName || '');
+    if (!cached) return;
+    const current = app.getVersion().split('.').map(Number);
+    const cachedVer = cached.slice(1, 4).map(Number);
+    const isNewer = cachedVer[0] - current[0] || cachedVer[1] - current[1] || cachedVer[2] - current[2];
+    if (isNewer <= 0) fs.rmSync(pending, { recursive: true, force: true });
+  } catch (_) {
+    // No cached update, or unreadable: nothing to clean.
+  }
 }
 
 // ── Launch at startup ───────────────────────────────────────────────────────────
