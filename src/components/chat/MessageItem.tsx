@@ -363,8 +363,42 @@ function isDirectVideoUrl(url: string): boolean {
   try { return DIRECT_VIDEO_EXT.test(new URL(url).pathname) } catch { return false }
 }
 
+type YouTubeMeta = { title: string; channel: string }
+
+const youTubeMetaCache = new Map<string, Promise<YouTubeMeta | null>>()
+
+function fetchYouTubeMeta(videoId: string): Promise<YouTubeMeta | null> {
+  let pending = youTubeMetaCache.get(videoId)
+  if (!pending) {
+    const target = encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)
+    pending = fetch(`https://www.youtube.com/oembed?url=${target}&format=json`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { title?: string; author_name?: string } | null) =>
+        data?.title ? { title: data.title, channel: data.author_name ?? '' } : null,
+      )
+      .catch(() => null)
+    youTubeMetaCache.set(videoId, pending)
+  }
+  return pending
+}
+
+function useYouTubeMeta(videoId: string): YouTubeMeta | null {
+  const [meta, setMeta] = useState<YouTubeMeta | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void fetchYouTubeMeta(videoId).then((m) => {
+      if (!cancelled) setMeta(m)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [videoId])
+  return meta
+}
+
 function YouTubeEmbed({ url, videoId }: { url: string; videoId: string }) {
   const [playing, setPlaying] = useState(false)
+  const meta = useYouTubeMeta(videoId)
   const thumb = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
 
   return (
@@ -376,7 +410,7 @@ function YouTubeEmbed({ url, videoId }: { url: string; videoId: string }) {
             src={`https://www.youtube.com/embed/${videoId}?autoplay=1`}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
-            title="YouTube"
+            title={meta?.title ?? 'YouTube'}
           />
         </div>
       ) : (
@@ -387,7 +421,7 @@ function YouTubeEmbed({ url, videoId }: { url: string; videoId: string }) {
         >
           <img
             src={thumb}
-            alt="YouTube"
+            alt={meta?.title ?? 'YouTube'}
             className="absolute inset-0 w-full h-full object-cover"
             referrerPolicy="no-referrer"
           />
@@ -409,7 +443,18 @@ function YouTubeEmbed({ url, videoId }: { url: string; videoId: string }) {
         <svg className="w-4 h-4 shrink-0 text-red-500" viewBox="0 0 24 24" fill="currentColor">
           <path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z" />
         </svg>
-        <span className="text-xs text-text-muted truncate">{url}</span>
+        {meta ? (
+          <span className="min-w-0 flex flex-col">
+            <span className="text-sm font-semibold text-text-primary line-clamp-2 leading-snug">
+              {meta.title}
+            </span>
+            {meta.channel && (
+              <span className="text-xs text-text-muted truncate">{meta.channel}</span>
+            )}
+          </span>
+        ) : (
+          <span className="text-xs text-text-muted truncate">{url}</span>
+        )}
       </a>
     </div>
   )
