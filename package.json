@@ -1,7 +1,7 @@
 {
   "name": "waifutxt-",
   "private": true,
-  "version": "0.60.0",
+  "version": "0.60.1",
   "type": "module",
   "main": "electron/main.cjs",
   "description": "Client Matrix — interface Discord, thème cyberpunk/anime. E2EE, threads, voix, DMs, waifus.",
@@ -70,7 +70,11 @@
       ],
       "icon": "build/icon.ico"
     },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}.${ext}"
+    },
     "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
