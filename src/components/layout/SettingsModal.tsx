@@ -361,6 +361,17 @@ function AccountSection() {
   const session = useAuthStore((s) => s.session)
   const authLogout = useAuthStore((s) => s.logout)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const [launchAtStartup, setLaunchAtStartup] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    window.waifuSystem?.getLaunchAtStartup().then(setLaunchAtStartup).catch(() => {})
+  }, [])
+
+  const handleToggleStartup = async () => {
+    if (launchAtStartup === null) return
+    const next = await window.waifuSystem?.setLaunchAtStartup(!launchAtStartup)
+    if (next !== undefined) setLaunchAtStartup(next)
+  }
 
   const handleLogout = async () => {
     setIsLoggingOut(true)
@@ -380,6 +391,33 @@ function AccountSection() {
           <p className="text-xs text-text-muted mt-0.5">Serveur : {session?.homeserver}</p>
         </div>
       </div>
+
+      {launchAtStartup !== null && (
+        <div className="p-4 rounded-lg border border-border bg-bg-primary/40 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-text-primary">Lancer au démarrage</p>
+            <p className="text-xs text-text-secondary mt-0.5">
+              Ouvre WaifuChat automatiquement à l'ouverture de session.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={launchAtStartup}
+            onClick={handleToggleStartup}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+              launchAtStartup ? 'bg-accent-pink' : 'bg-bg-hover'
+            }`}
+            title="Activer ou désactiver le lancement au démarrage"
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                launchAtStartup ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
+      )}
 
       <div className="px-4 py-2.5 rounded-lg border border-border bg-bg-primary/40 flex items-center justify-between">
         <span className="text-xs text-text-muted">Version</span>

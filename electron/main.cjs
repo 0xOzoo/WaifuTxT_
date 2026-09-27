@@ -1,7 +1,8 @@
 // electron/main.cjs  — CommonJS wrapper (avoids "type":"module" conflict)
 'use strict';
 
-const { app, BrowserWindow, shell, session, protocol, desktopCapturer } = require('electron');
+const { app, BrowserWindow, shell, session, protocol, desktopCapturer, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs   = require('fs');
 const url  = require('url');
@@ -132,6 +133,8 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  setupAutoUpdater();
+  setupStartupSettings();
 });
 
 function escapeHtml(s) {
@@ -335,6 +338,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration:  false,
       spellcheck:       true,
+      preload: path.join(__dirname, 'preload.cjs'),
       // Sandbox must be off — matrix-sdk-crypto-wasm calls SharedArrayBuffer
       sandbox: false,
     },
@@ -353,6 +357,53 @@ function createWindow() {
   });
 
   mainWindow.loadURL('waifutxt://app/index.html');
+}
+
+// ── Auto-update ────────────────────────────────────────────────────────────────
+// Checks the GitHub releases feed (owner/repo from package.json "build.publish")
+// and, once a new version is downloaded, waits for the renderer to ask the user
+// to restart (UpdateBanner) rather than forcing it — matches Discord's UX.
+function setupAutoUpdater() {
+  // Dev runs and the portable exe (which electron-updater can't self-replace)
+  // skip auto-update entirely.
+  if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_DIR) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  const send = (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('updater:status', payload);
+  };
+
+  autoUpdater.on('checking-for-update', () => send({ state: 'checking' }));
+  autoUpdater.on('update-available',    (info) => send({ state: 'available', version: info.version }));
+  autoUpdater.on('update-not-available', () => send({ state: 'not-available' }));
+  autoUpdater.on('download-progress', (p) => send({ state: 'downloading', percent: Math.round(p.percent) }));
+  autoUpdater.on('update-downloaded', (info) => send({ state: 'downloaded', version: info.version }));
+  autoUpdater.on('error', (err) => {
+    console.error('[updater] error:', err);
+    send({ state: 'error', message: err instanceof Error ? err.message : String(err) });
+  });
+
+  ipcMain.on('updater:install', () => autoUpdater.quitAndInstall());
+
+  const check = () => autoUpdater.checkForUpdates().catch((err) => console.error('[updater] check failed:', err));
+
+  // First check shortly after launch (let the window paint first), then every
+  // few hours while the app stays open — same cadence Discord uses.
+  setTimeout(check, 5000);
+  setInterval(check, 4 * 60 * 60 * 1000);
+}
+
+// ── Launch at startup ───────────────────────────────────────────────────────────
+// Renderer toggle in Settings > Compte. Backed by the OS's native login-item
+// mechanism (registry Run key on Windows, autostart .desktop entry on Linux).
+function setupStartupSettings() {
+  ipcMain.handle('startup:get', () => app.getLoginItemSettings().openAtLogin);
+  ipcMain.handle('startup:set', (_event, enabled) => {
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    return app.getLoginItemSettings().openAtLogin;
+  });
 }
 
 app.on('window-all-closed', () => app.quit());

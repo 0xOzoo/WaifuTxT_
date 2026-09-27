@@ -3,6 +3,7 @@ import { useAuthStore } from './stores/authStore'
 import { initClient } from './lib/matrix'
 import { LoginScreen } from './components/auth/LoginScreen'
 import { AppShell } from './components/layout/AppShell'
+import { UpdateBanner } from './components/common/UpdateBanner'
 import { useNotifications } from './hooks/useNotifications'
 
 class ErrorBoundary extends Component<{ children: ReactNode; onReset: () => void }, { error: Error | null }> {
@@ -43,7 +44,7 @@ class ErrorBoundary extends Component<{ children: ReactNode; onReset: () => void
   }
 }
 
-export function App() {
+function AppInner() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
   const [isRestoring, setIsRestoring] = useState(true)
   const [restoreError, setRestoreError] = useState<string | null>(null)
@@ -116,5 +117,14 @@ export function App() {
     <ErrorBoundary onReset={handleReset}>
       {isLoggedIn ? <AppShell /> : <LoginScreen />}
     </ErrorBoundary>
+  )
+}
+
+export function App() {
+  return (
+    <>
+      <AppInner />
+      <UpdateBanner />
+    </>
   )
 }
