@@ -118,7 +118,7 @@ export function AppShell() {
   const desktopMembersAnim = useOverlayAnimation(!isMobile && showMemberPanel && !!activeRoomId, 200)
 
   return (
-    <div className="h-[100dvh] w-screen flex overflow-hidden relative">
+    <div className="h-app w-screen flex overflow-hidden relative">
       {!isMobile && (
         <>
           <SpaceSidebar />
@@ -148,7 +148,7 @@ export function AppShell() {
       {isMobile && !isMobileMenuOpen && !activeRoomId && (
         <button
           onClick={toggleMobileMenu}
-          className="fixed top-3 left-3 z-30 lg:hidden h-9 w-9 rounded-lg border border-border bg-bg-secondary/95 text-text-primary flex items-center justify-center"
+          className="fixed top-[calc(var(--titlebar-height)+0.75rem)] left-3 z-30 lg:hidden h-9 w-9 rounded-lg border border-border bg-bg-secondary/95 text-text-primary flex items-center justify-center"
           title="Ouvrir la navigation"
           aria-label="Ouvrir la navigation"
         >
