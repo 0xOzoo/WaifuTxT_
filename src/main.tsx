@@ -9,6 +9,8 @@ import { loadAndApplyTheme } from './lib/theme.ts'
 // Restore saved theme and accent color before React renders to avoid a flash.
 loadAndApplyTheme()
 loadAndApplyAccentColor()
+// Reserve the desktop title bar's space before the first paint (TitleBar keeps it in sync afterwards).
+if (window.waifuWindow) document.documentElement.setAttribute('data-titlebar', '')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

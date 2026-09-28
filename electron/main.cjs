@@ -40,6 +40,9 @@ protocol.registerSchemesAsPrivileged([
 
 const DIST = path.join(__dirname, '..', 'dist');
 
+// macOS keeps its native traffic lights; elsewhere the app draws its own title bar.
+const CUSTOM_TITLE_BAR = process.platform !== 'darwin';
+
 const MIME = {
   '.html':  'text/html',
   '.js':    'application/javascript',
@@ -143,6 +146,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  setupWindowControls();
   setupAutoUpdater();
   setupStartupSettings();
   setupSteamProxy();
@@ -330,6 +334,8 @@ function createWindow() {
     minHeight: 520,
     backgroundColor: '#0b0b12',
     autoHideMenuBar: true,
+    // Windows/Linux: no native frame, the renderer draws its own title bar (src/components/layout/TitleBar.tsx).
+    frame: !CUSTOM_TITLE_BAR,
     // icon is resolved at runtime so missing icon never crashes the app
     icon: (() => {
       // dist/ is packaged inside the asar; process.resourcesPath points to
@@ -368,6 +374,36 @@ function createWindow() {
   });
 
   mainWindow.loadURL('waifutxt://app/index.html');
+}
+
+// ── Custom title bar ────────────────────────────────────────────────────────────
+// The renderer's title bar drives the frameless window through these channels and
+// follows its maximized/fullscreen state (to swap the maximize icon and to hide itself in fullscreen).
+function setupWindowControls() {
+  const win = mainWindow;
+  const state = () => ({ maximized: win.isMaximized(), fullscreen: win.isFullScreen() });
+  const push = () => {
+    if (!win.isDestroyed()) win.webContents.send('window:state', state());
+  };
+  for (const evt of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) win.on(evt, push);
+
+  // Frameless windows have no menu bar, so handle F11 here; preventDefault also stops the
+  // default menu's own F11 accelerator from toggling it back.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11' && !input.control && !input.alt && !input.meta && !input.shift) {
+      event.preventDefault();
+      win.setFullScreen(!win.isFullScreen());
+    }
+  });
+
+  ipcMain.handle('window:get-state', () => state());
+  ipcMain.on('window:minimize', () => win.minimize());
+  ipcMain.on('window:toggle-maximize', () => {
+    if (win.isFullScreen()) win.setFullScreen(false);
+    else if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  });
+  ipcMain.on('window:close', () => win.close());
 }
 
 // ── Auto-update ────────────────────────────────────────────────────────────────

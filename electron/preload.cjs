@@ -25,3 +25,18 @@ contextBridge.exposeInMainWorld('waifuSystem', {
 contextBridge.exposeInMainWorld('waifuSteam', {
   request: (method, path, token) => ipcRenderer.invoke('steam:request', { method, path, token }),
 });
+
+// Custom title bar (frameless window) — not exposed on macOS, which keeps the native frame.
+if (process.platform !== 'darwin') {
+  contextBridge.exposeInMainWorld('waifuWindow', {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
+    close: () => ipcRenderer.send('window:close'),
+    getState: () => ipcRenderer.invoke('window:get-state'),
+    onState(callback) {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('window:state', listener);
+      return () => ipcRenderer.removeListener('window:state', listener);
+    },
+  });
+}

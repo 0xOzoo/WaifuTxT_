@@ -32,6 +32,31 @@
   --color-scrollbar-track: transparent;
 }
 
+/* Desktop title bar (components/layout/TitleBar.tsx): 0 on the web build, macOS and in fullscreen. */
+:root {
+  --titlebar-height: 0px;
+}
+:root[data-titlebar] {
+  --titlebar-height: 30px;
+}
+
+/* Full window height minus the title bar; use instead of h-screen for top-level screens. */
+@utility h-app {
+  height: calc(100dvh - var(--titlebar-height));
+}
+
+@utility app-drag {
+  -webkit-app-region: drag;
+}
+@utility app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Full-window overlays (modals, lightboxes, drawers) start below the title bar, which stays usable. */
+:root[data-titlebar] .fixed.inset-0 {
+  top: var(--titlebar-height);
+}
+
 @layer base {
   * {
     scrollbar-width: thin;
@@ -42,6 +67,7 @@
     @apply bg-bg-primary text-text-primary;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     overflow: hidden;
+    padding-top: var(--titlebar-height);
   }
 
   ::selection {
